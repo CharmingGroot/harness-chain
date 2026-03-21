@@ -15,40 +15,62 @@
 ## 아키텍처
 
 ```
-                    UI (page.tsx)
-                         │
-          ┌──────────────┴──────────────┐
-          │ 대화 탭                      │ 하네스 탭
-          ▼                             ▼
-  POST /api/analyze             POST /api/harnesses/{id}/run
-  (SSE 스트리밍)                (202 즉시 반환, 백그라운드)
-          │                             │
-          │                             ▼
-          │                        Executor
-          │                   executeHarness()
-          │                   markRunning() ──▶ Redis (TTL 30m)
-          │                   updateRun()  ──▶ File Store
-          │                             │
-          └─────────────┬───────────────┘
-                        ▼
-                   Orchestrator
-              AgentLoop (CA SDK)
-              SubAgentTool (병렬 위임)
-                        │
-           ┌────────────┴────────────┐
-           ▼                         ▼
-      Source (ISource)           SubAgent
-      PostgreSQL 어댑터          (CA AgentLoop)
-      get_schema / run_query      독립 시스템 프롬프트
-
-┌───────────────────┐   ┌────────────────────────────────┐
-│  File Store       │   │  Redis (hc-redis :6399)        │
-│  data/*.json      │   │  hc:run:{id}  Hash + TTL 30m   │
-│  - harnesses.json │   │  hc:active    Set (실행중 ID)  │
-│  - subagents.json │   │                                │
-│  - runs.json      │   │  서버 재시작 시 자동 만료 →    │
-│  (영구 이력)      │   │  파일 스토어에 failed 기록     │
-└───────────────────┘   └────────────────────────────────┘
+ ┌──────────────────────────────────────────────────────────┐
+ │  인프라 레이어 (docker-compose)                           │
+ │                                                          │
+ │  PostgreSQL :5499 (pg-sandbox)      Redis :6399          │
+ └──────────┬───────────────────────────────┬───────────────┘
+            │ 접속                           │ 실행 상태 TTL 30m
+            ▼                               │
+ ┌─────────────────────────────┐           │
+ │  Source  (정적 인프라 정의)  │           │
+ │  id: pg-sandbox             │           │
+ │  type: postgresql           │           │
+ │                             │           │
+ │  getTools() 로 도구 노출 ─────────────────────────┐
+ │    execute_query             │           │          │
+ │    explain_query             │           │          │
+ │    get_schema                │           │          │
+ │    get_table_sample          │           │          │
+ │    get_stats                 │           │          │
+ │                             │           │          │
+ │  외부 연동 (comingSoon)      │           │          │
+ │    http_request              │           │          │
+ │    slack_notify / email_send │           │          │
+ └─────────────────────────────┘           │          │
+                                           │          │ HarnessToolAdapter
+ ┌─────────────────────────────┐           │          │ (HarnessTool → CA ITool)
+ │  File Store  (data/*.json)  │           │          │
+ │                             │           │          ▼
+ │  subagents.json             │   ┌───────────────────────────────────────┐
+ │  유저가 UI에서 생성/편집 ────────▶  Orchestrator (CA AgentLoop + Registry)│
+ │  - systemPrompt             │   │                                       │
+ │  - 허용 도구 목록            │   │  실행 시점에 SubAgentDef 로드         │
+ │  - model / maxIterations    │   │  → SubAgentTool로 인스턴스화          │
+ │                             │   │  → 소스 도구 서브셋 부여              │
+ │  harnesses.json             │   │  → 부모 ToolRegistry에 등록           │
+ │  유저가 UI에서 생성/편집 ────────▶                                       │
+ │  - 실행 단계 (step[])        │   │  ToolRegistry                        │
+ │  - 소스/도구/서브에이전트 ref│   │  ├─ execute_query (Source)           │
+ │                             │   │  ├─ get_schema    (Source)           │
+ │  runs.json                  │   │  └─ subagent_{id} (SubAgentTool)     │
+ │  실행 이력 (영구)  ◀──────────────│                                       │
+ └─────────────────────────────┘   └───────────────────┬───────────────────┘
+                                                       │
+                              ┌────────────────────────┴──────────────────────┐
+                              │ 대화 탭                    │ 하네스 탭          │
+                              ▼                            ▼                   │
+                      POST /api/analyze          POST /api/harnesses/{id}/run  │
+                      SSE 스트리밍               202 즉시 반환, 백그라운드      │
+                              │                            │                   │
+                              │                            ▼                   │
+                              │                       Executor ───────────────▶ Redis
+                              │                       runs.json 기록           (TTL 30m)
+                              ▼                            │
+                         UI (page.tsx)  ◀──────────────────┘
+                         채팅·로그 실시간 표시
+                         하네스/서브에이전트 생성·편집
+                         실행 큐 대시보드
 ```
 
 ### 레이어 설명
