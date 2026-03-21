@@ -15,34 +15,31 @@
 ## 아키텍처
 
 ```
-┌─────────────────────────────────────────────────────────┐
-│                    Next.js App (apps/web)                │
-│                                                          │
-│  ┌──────────┐   ┌──────────────────────────────────┐    │
-│  │  UI      │   │  API Routes                       │    │
-│  │ page.tsx │──▶│  /api/analyze   SSE 스트리밍      │    │
-│  │ (React)  │   │  /api/harnesses CRUD              │    │
-│  └──────────┘   │  /api/queue     실행 이력         │    │
-│                 │  /api/registry  소스/도구 목록    │    │
-│                 └──────────┬─────────────────────────┘   │
-│                            │                             │
-│              ┌─────────────▼──────────────┐             │
-│              │       Executor             │             │
-│              │  executeHarness()          │             │
-│              │  markRunning() → Redis     │             │
-│              └─────────────┬──────────────┘             │
-│                            │                             │
-│              ┌─────────────▼──────────────┐             │
-│              │      Orchestrator          │             │
-│              │  AgentLoop (CA SDK)        │             │
-│              │  SubAgentTool (병렬 위임)  │             │
-│              └──┬──────────┬──────────────┘             │
-│                 │          │                             │
-│         ┌───────▼──┐  ┌────▼────────┐                  │
-│         │  Source   │  │  SubAgent   │                  │
-│         │PostgreSQL │  │ (CA Agent)  │                  │
-│         └───────────┘  └─────────────┘                  │
-└─────────────────────────────────────────────────────────┘
+                    UI (page.tsx)
+                         │
+          ┌──────────────┴──────────────┐
+          │ 대화 탭                      │ 하네스 탭
+          ▼                             ▼
+  POST /api/analyze             POST /api/harnesses/{id}/run
+  (SSE 스트리밍)                (202 즉시 반환, 백그라운드)
+          │                             │
+          │                             ▼
+          │                        Executor
+          │                   executeHarness()
+          │                   markRunning() ──▶ Redis (TTL 30m)
+          │                   updateRun()  ──▶ File Store
+          │                             │
+          └─────────────┬───────────────┘
+                        ▼
+                   Orchestrator
+              AgentLoop (CA SDK)
+              SubAgentTool (병렬 위임)
+                        │
+           ┌────────────┴────────────┐
+           ▼                         ▼
+      Source (ISource)           SubAgent
+      PostgreSQL 어댑터          (CA AgentLoop)
+      get_schema / run_query      독립 시스템 프롬프트
 
 ┌───────────────────┐   ┌────────────────────────────────┐
 │  File Store       │   │  Redis (hc-redis :6399)        │
