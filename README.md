@@ -14,63 +14,49 @@
 
 ## 아키텍처
 
-```
- ┌──────────────────────────────────────────────────────────┐
- │  인프라 레이어 (docker-compose)                           │
- │                                                          │
- │  PostgreSQL :5499 (pg-sandbox)      Redis :6399          │
- └──────────┬───────────────────────────────┬───────────────┘
-            │ 접속                           │ 실행 상태 TTL 30m
-            ▼                               │
- ┌─────────────────────────────┐           │
- │  Source  (정적 인프라 정의)  │           │
- │  id: pg-sandbox             │           │
- │  type: postgresql           │           │
- │                             │           │
- │  getTools() 로 도구 노출 ─────────────────────────┐
- │    execute_query             │           │          │
- │    explain_query             │           │          │
- │    get_schema                │           │          │
- │    get_table_sample          │           │          │
- │    get_stats                 │           │          │
- │                             │           │          │
- │  외부 연동 (comingSoon)      │           │          │
- │    http_request              │           │          │
- │    slack_notify / email_send │           │          │
- └─────────────────────────────┘           │          │
-                                           │          │ HarnessToolAdapter
- ┌─────────────────────────────┐           │          │ (HarnessTool → CA ITool)
- │  File Store  (data/*.json)  │           │          │
- │                             │           │          ▼
- │  subagents.json             │   ┌───────────────────────────────────────┐
- │  유저가 UI에서 생성/편집 ────────▶  Orchestrator (CA AgentLoop + Registry)│
- │  - systemPrompt             │   │                                       │
- │  - 허용 도구 목록            │   │  실행 시점에 SubAgentDef 로드         │
- │  - model / maxIterations    │   │  → SubAgentTool로 인스턴스화          │
- │                             │   │  → 소스 도구 서브셋 부여              │
- │  harnesses.json             │   │  → 부모 ToolRegistry에 등록           │
- │  유저가 UI에서 생성/편집 ────────▶                                       │
- │  - 실행 단계 (step[])        │   │  ToolRegistry                        │
- │  - 소스/도구/서브에이전트 ref│   │  ├─ execute_query (Source)           │
- │                             │   │  ├─ get_schema    (Source)           │
- │  runs.json                  │   │  └─ subagent_{id} (SubAgentTool)     │
- │  실행 이력 (영구)  ◀──────────────│                                       │
- └─────────────────────────────┘   └───────────────────┬───────────────────┘
-                                                       │
-                              ┌────────────────────────┴──────────────────────┐
-                              │ 대화 탭                    │ 하네스 탭          │
-                              ▼                            ▼                   │
-                      POST /api/analyze          POST /api/harnesses/{id}/run  │
-                      SSE 스트리밍               202 즉시 반환, 백그라운드      │
-                              │                            │                   │
-                              │                            ▼                   │
-                              │                       Executor ───────────────▶ Redis
-                              │                       runs.json 기록           (TTL 30m)
-                              ▼                            │
-                         UI (page.tsx)  ◀──────────────────┘
-                         채팅·로그 실시간 표시
-                         하네스/서브에이전트 생성·편집
-                         실행 큐 대시보드
+```mermaid
+flowchart TB
+    subgraph infra["인프라 (docker-compose)"]
+        PG["PostgreSQL :5499\npg-sandbox"]
+        RD["Redis :6399"]
+    end
+
+    subgraph source["Source — 정적 인프라 정의"]
+        PG --> SRC["pg-sandbox\ntype: postgresql"]
+        SRC -->|"getTools()"| TOOLS["SQL 도구\nexecute_query · explain_query\nget_schema · get_table_sample · get_stats"]
+        SRC -.->|"comingSoon"| EXT["외부 연동 도구\nhttp_request · slack_notify\nemail_send · write_file"]
+    end
+
+    subgraph store["File Store (data/*.json)"]
+        SA_JSON["subagents.json\n유저가 UI에서 생성·편집\nsystemPrompt / 허용 도구 목록\nmodel / maxIterations"]
+        HN_JSON["harnesses.json\n유저가 UI에서 생성·편집\n실행 단계(step[]) 정의"]
+        RN_JSON["runs.json\n실행 이력 (영구 보존)"]
+    end
+
+    subgraph orch["Orchestrator (CA AgentLoop + Registry)"]
+        ADAPT["HarnessToolAdapter\nHarnessTool → CA ITool"]
+        REG["ToolRegistry\n소스 도구 + SubAgentTool"]
+        TOOLS --> ADAPT --> REG
+        SA_JSON -->|"런타임 로드 → SubAgentTool 인스턴스화\n소스 도구 서브셋 부여"| REG
+    end
+
+    HN_JSON --> EX
+
+    subgraph exec["실행 경로"]
+        UI["UI (page.tsx)\n채팅 · 하네스 관리 · 실행 큐 대시보드"]
+        AN["POST /api/analyze\nSSE 스트리밍"]
+        RUN["POST /api/harnesses/{id}/run\n202 즉시 반환"]
+        EX["Executor\nexecuteHarness()"]
+
+        UI -->|"대화 탭"| AN
+        UI -->|"하네스 탭"| RUN
+        RUN --> EX
+        EX -->|"상태 기록"| RN_JSON
+        EX -->|"TTL 30m"| RD
+        AN --> orch
+        EX --> orch
+        orch -->|"SSE 이벤트"| UI
+    end
 ```
 
 ### 레이어 설명
