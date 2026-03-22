@@ -112,12 +112,13 @@ export default function Home() {
 
   useEffect(() => { refreshAll(); }, [refreshAll]);
 
-  const createSession = () => {
+  const createSession = (name?: string): string => {
     const id = `sess_${Date.now()}`;
-    const session: Session = { id, name: `세션 ${sessions.length + 1}`, createdAt: new Date().toISOString() };
+    const session: Session = { id, name: name ?? `세션 ${sessions.length + 1}`, createdAt: new Date().toISOString() };
     setSessions(prev => [...prev, session]);
     setActiveSessionId(id);
     setNavTab("chat");
+    return id;
   };
 
   const deleteSession = (id: string) => {
@@ -186,13 +187,24 @@ export default function Home() {
     }
   };
 
+  const runHarnessInSession = useCallback((harness: RealHarness) => {
+    const sid = activeSessionId ?? createSession(harness.name);
+    if (activeSessionId) {
+      setActiveSessionId(sid);
+      setNavTab("chat");
+    }
+    const prompt = `하네스 '${harness.name}'를 실행해줘.\n목표: ${harness.description}`;
+    const attached: PaletteItem[] = [{ kind: "harness", id: harness.id, name: harness.name, description: harness.description }];
+    setTimeout(() => streamQuery(sid, prompt, attached, globalModel), 0);
+  }, [activeSessionId, globalModel]); // eslint-disable-line react-hooks/exhaustive-deps
+
   const activeMessages = activeSessionId ? (sessionMessages[activeSessionId] ?? []) : [];
   const streamingCount = Object.values(sessionMessages).flat().filter(m => m.status === "streaming").length;
 
   // Render a blank shell on the server to avoid hydration mismatch
   if (!mounted) {
     return <div className="flex flex-col h-screen" style={{ background: "var(--content-bg)" }} />;
-  }
+  };
 
   return (
     <div className="flex flex-col h-screen" style={{ background: "var(--content-bg)" }}>
@@ -250,7 +262,7 @@ export default function Home() {
           style={{ background: "var(--sidebar-bg)", borderRight: "1px solid var(--sidebar-border)" }}>
           <div className="px-3 pt-3 pb-2 flex items-center justify-between">
             <span className="text-[10.5px] font-medium uppercase tracking-wider" style={{ color: "var(--text-tertiary)" }}>세션</span>
-            <button onClick={createSession}
+            <button onClick={() => createSession()}
               className="text-[11px] px-2 py-0.5 rounded"
               style={{ background: "var(--active-bg)", color: "var(--accent)" }}>
               + 새 세션
@@ -262,7 +274,7 @@ export default function Home() {
                 <p className="text-[11.5px] leading-relaxed" style={{ color: "var(--text-tertiary)" }}>
                   세션을 만들어<br />대화를 시작하세요
                 </p>
-                <button onClick={createSession}
+                <button onClick={() => createSession()}
                   className="mt-3 px-3 py-1.5 rounded-lg text-[12px] font-medium"
                   style={{ background: "var(--accent)", color: "white" }}>
                   세션 만들기
@@ -313,6 +325,7 @@ export default function Home() {
               model={globalModel}
               onSaved={async () => { await refreshAll(); setNavTab("chat"); }}
               onNavigate={setNavTab}
+              onRunInSession={runHarnessInSession}
             />
           )}
           {navTab === "observability" && <ObservabilityTab />}
@@ -1397,8 +1410,8 @@ function SubAgentsTab({ subAgents, tools, onSaved }: { subAgents: SubAgent[]; to
 
 // ── Harnesses Tab ─────────────────────────────────────────────────────────────
 
-function HarnessesTab({ harnesses, registry, model, onSaved, onNavigate }: {
-  harnesses: RealHarness[]; registry: Registry; model: string; onSaved: () => void; onNavigate: (tab: NavTab) => void;
+function HarnessesTab({ harnesses, registry, model, onSaved, onNavigate, onRunInSession }: {
+  harnesses: RealHarness[]; registry: Registry; model: string; onSaved: () => void; onNavigate: (tab: NavTab) => void; onRunInSession: (h: RealHarness) => void;
 }) {
   const [mode, setMode] = useState<"list" | "build">(harnesses.length === 0 ? "build" : "list");
   const [processDesc, setProcessDesc] = useState("");
@@ -1407,23 +1420,15 @@ function HarnessesTab({ harnesses, registry, model, onSaved, onNavigate }: {
   const [builtReport, setBuiltReport] = useState<string | null>(null);
   const [buildMeta, setBuildMeta] = useState<{ toolCallCount: number; iterations: number; elapsedMs: number } | null>(null);
   const [showLog, setShowLog] = useState(true);
-  const [runningIds, setRunningIds] = useState<Set<string>>(new Set());
+
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const logEndRef = useRef<HTMLDivElement>(null);
   const startTimeRef = useRef(0);
 
   useEffect(() => { logEndRef.current?.scrollIntoView({ behavior: "smooth" }); }, [buildLog]);
 
-  const handleRunHarness = async (harnessId: string) => {
-    setRunningIds(prev => new Set(prev).add(harnessId));
-    try {
-      await fetch(`/api/harnesses/${harnessId}/run`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ model }) });
-      // 실행 현황 탭으로 이동 (백그라운드 실행 중)
-      onNavigate("observability");
-    } catch {
-      setRunningIds(prev => { const next = new Set(prev); next.delete(harnessId); return next; });
-    }
-    // runningId는 탭 이동 후에도 유지 — 실행 현황에서 완료 시 자동 해제됨
+  const handleRunHarness = (h: RealHarness) => {
+    onRunInSession(h);
   };
 
   const handleBuild = async () => {
@@ -1512,11 +1517,10 @@ function HarnessesTab({ harnesses, registry, model, onSaved, onNavigate }: {
                     {new Date(h.createdAt).toLocaleDateString("ko-KR")}
                   </div>
                   <button
-                    onClick={() => handleRunHarness(h.id)}
-                    disabled={runningIds.has(h.id)}
+                    onClick={() => handleRunHarness(h)}
                     className="px-3 py-1 rounded-lg text-[12px] font-medium"
-                    style={{ background: runningIds.has(h.id) ? "var(--border)" : "var(--accent)", color: runningIds.has(h.id) ? "var(--text-tertiary)" : "white" }}>
-                    {runningIds.has(h.id) ? "실행 중..." : "▶ 실행"}
+                    style={{ background: "var(--accent)", color: "white" }}>
+                    ▶ 실행
                   </button>
                 </div>
               </div>
