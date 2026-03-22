@@ -1817,6 +1817,8 @@ function HarnessesTab({ harnesses, registry, model, onSaved, onNavigate, onRunIn
   const [buildMeta, setBuildMeta] = useState<{ toolCallCount: number; iterations: number; elapsedMs: number } | null>(null);
   const [showLog, setShowLog] = useState(true);
   const [selectedHarness, setSelectedHarness] = useState<RealHarness | null>(null);
+  const [generatedDraft, setGeneratedDraft] = useState<{ name: string; description: string; nodes: HarnessNode[]; edges: HarnessEdge[] } | null>(null);
+  const [buildError, setBuildError] = useState<string | null>(null);
 
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const logEndRef = useRef<HTMLDivElement>(null);
@@ -1831,45 +1833,38 @@ function HarnessesTab({ harnesses, registry, model, onSaved, onNavigate, onRunIn
 
   const handleBuild = async () => {
     if (!processDesc.trim() || isBuilding) return;
-    setIsBuilding(true); setBuildLog([]); setBuiltReport(null); setBuildMeta(null); setShowLog(true);
+    setIsBuilding(true);
+    setGeneratedDraft(null);
+    setBuildError(null);
+    setBuildLog([]);
+    setBuiltReport(null);
     startTimeRef.current = Date.now();
     try {
-      const res = await fetch("/api/analyze", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ query: processDesc }) });
-      if (!res.ok) {
-        const errBody = await res.json().catch(() => ({ error: `서버 오류 (${res.status})` }));
-        throw new Error(errBody.error ?? `서버 오류 (${res.status})`);
-      }
-      if (!res.body) throw new Error("No response body");
-      const reader = res.body.getReader();
-      const decoder = new TextDecoder();
-      let buffer = "";
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        buffer += decoder.decode(value, { stream: true });
-        const lines = buffer.split("\n\n");
-        buffer = lines.pop() ?? "";
-        for (const line of lines) {
-          if (!line.startsWith("data: ")) continue;
-          try {
-            const event = JSON.parse(line.slice(6)) as AnalyzeEvent;
-            if (event.type === "report") { setBuiltReport(event.report); setBuildMeta({ toolCallCount: event.meta.toolCallCount, iterations: event.meta.iterations, elapsedMs: Date.now() - startTimeRef.current }); setShowLog(false); }
-            else { const entry = eventToLogEntry(event); if (entry) setBuildLog(p => [...p, entry]); }
-          } catch { /* ignore */ }
-        }
-      }
-      if (!builtReport) setBuildLog(p => [...p, { kind: "error", message: "응답을 받지 못했습니다." }]);
+      const res = await fetch("/api/harnesses/generate", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ prompt: processDesc }),
+      });
+      const data = await res.json() as { name?: string; description?: string; nodes?: HarnessNode[]; edges?: HarnessEdge[]; error?: string };
+      if (!res.ok || data.error) throw new Error(data.error ?? `서버 오류 (${res.status})`);
+      setGeneratedDraft({ name: data.name ?? processDesc.slice(0, 40), description: data.description ?? "", nodes: data.nodes ?? [], edges: data.edges ?? [] });
     } catch (err) {
-      setBuildLog(p => [...p, { kind: "error", message: err instanceof Error ? err.message : String(err) }]);
-    } finally { setIsBuilding(false); }
+      setBuildError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setIsBuilding(false);
+    }
   };
 
   const handleSaveHarness = async () => {
-    if (!builtReport || !processDesc) return;
+    if (!generatedDraft) return;
     await fetch("/api/harnesses", {
-      method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ name: processDesc.slice(0, 40), description: processDesc.slice(0, 100), schedule: { type: "once" }, steps: [] }),
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ...generatedDraft, schedule: { type: "once" } }),
     });
+    setGeneratedDraft(null);
+    setProcessDesc("");
+    setBuildError(null);
     onSaved();
   };
 
@@ -1959,15 +1954,16 @@ function HarnessesTab({ harnesses, registry, model, onSaved, onNavigate, onRunIn
                 <span>⚙ 도구 {registry.tools.filter(t => !t.comingSoon).length}개</span>
                 <span>🤖 서브에이전트 {registry.subAgents.length}개</span>
               </div>
-              {!builtReport && buildLog.length === 0 && !isBuilding && (
+              {/* Empty state — template suggestions */}
+              {!generatedDraft && !isBuilding && !buildError && (
                 <div className="flex flex-col items-center text-center py-8">
                   <span className="text-3xl mb-3">⛓️</span>
-                  <h2 className="text-[16px] font-semibold mb-1" style={{ color: "var(--text-primary)" }}>하네스 빌드</h2>
+                  <h2 className="text-[16px] font-semibold mb-1" style={{ color: "var(--text-primary)" }}>AI 하네스 빌더</h2>
                   <p className="text-[13px] mb-6 max-w-sm leading-relaxed" style={{ color: "var(--text-secondary)" }}>
-                    자동화할 업무를 설명하면 AI가 하네스를 설계합니다
+                    자동화할 업무를 설명하면 AI가 노드 · 엣지 설계와 검증을 자동으로 완료합니다
                   </p>
                   <div className="w-full max-w-sm text-left">
-                    <p className="text-[11px] mb-2" style={{ color: "var(--text-tertiary)" }}>템플릿으로 빠르게 시작</p>
+                    <p className="text-[11px] mb-2" style={{ color: "var(--text-tertiary)" }}>예시로 빠르게 시작</p>
                     <div className="flex flex-col gap-2">
                       {TEMPLATES.map(t => (
                         <button key={t.label} onClick={() => { setProcessDesc(t.desc); setTimeout(() => textareaRef.current?.focus(), 50); }}
@@ -1980,36 +1976,70 @@ function HarnessesTab({ harnesses, registry, model, onSaved, onNavigate, onRunIn
                   </div>
                 </div>
               )}
-              {(isBuilding || (buildLog.length > 0 && showLog)) && (
-                <div className="mt-4">
-                  <div className="text-[11px] font-medium uppercase tracking-wider mb-3" style={{ color: "var(--text-tertiary)" }}>
-                    {isBuilding ? <span className="flex items-center gap-1.5"><span className="spinner" />빌드 중...</span> : "실행 로그"}
-                  </div>
-                  <div className="rounded-lg overflow-hidden text-[12px] font-mono" style={{ background: "#f7f7f5", border: "1px solid var(--border)" }}>
-                    {buildLog.map((entry, i) => <LogLine key={i} entry={entry} />)}
-                    {isBuilding && <div className="px-4 py-2.5" style={{ color: "var(--text-tertiary)", borderTop: "1px solid var(--border)" }}><span className="animate-pulse">●</span> 분석 중...</div>}
-                    <div ref={logEndRef} />
+
+              {/* Loading state */}
+              {isBuilding && (
+                <div className="flex flex-col items-center py-16 gap-4">
+                  <div className="spinner" style={{ width: 28, height: 28 }} />
+                  <div className="text-[13px]" style={{ color: "var(--text-secondary)" }}>
+                    노드 설계 → 검증 → 엣지 설계 → 검증 중...
                   </div>
                 </div>
               )}
-              {builtReport && !showLog && (
+
+              {/* Error state */}
+              {buildError && !isBuilding && (
+                <div className="mt-4 rounded-lg px-4 py-3" style={{ background: "#fef2f2", border: "1px solid #fca5a5" }}>
+                  <div className="text-[12px] font-medium mb-1" style={{ color: "#b91c1c" }}>생성 실패</div>
+                  <div className="text-[12px]" style={{ color: "#7f1d1d" }}>{buildError}</div>
+                  <button onClick={() => setBuildError(null)} className="mt-2 text-[11px]" style={{ color: "#b91c1c" }}>닫기</button>
+                </div>
+              )}
+
+              {/* Generated draft preview */}
+              {generatedDraft && !isBuilding && (
                 <div className="mt-4">
-                  {buildMeta && (
-                    <div className="flex items-center gap-4 mb-4 text-[11px] pb-3" style={{ color: "var(--text-tertiary)", borderBottom: "1px solid var(--border)" }}>
-                      <span>툴 호출 {buildMeta.toolCallCount}회</span>
-                      <span>반복 {buildMeta.iterations}회</span>
-                      <span>{(buildMeta.elapsedMs / 1000).toFixed(1)}초</span>
-                      <button onClick={() => setShowLog(true)} className="ml-auto" style={{ color: "var(--text-tertiary)" }}>로그 보기</button>
+                  {/* Header */}
+                  <div className="flex items-start justify-between mb-4 pb-3" style={{ borderBottom: "1px solid var(--border)" }}>
+                    <div>
+                      <div className="text-[16px] font-semibold" style={{ color: "var(--text-primary)" }}>{generatedDraft.name}</div>
+                      {generatedDraft.description && (
+                        <div className="text-[12px] mt-0.5" style={{ color: "var(--text-secondary)" }}>{generatedDraft.description}</div>
+                      )}
+                      <div className="flex gap-3 mt-2 text-[11px]" style={{ color: "var(--text-tertiary)" }}>
+                        <span>노드 {generatedDraft.nodes.length}개</span>
+                        <span>엣지 {generatedDraft.edges.length}개</span>
+                      </div>
                     </div>
-                  )}
-                  <div className="report-content" dangerouslySetInnerHTML={{ __html: renderMarkdown(builtReport) }} />
-                  <div className="mt-6 flex items-center gap-3">
+                  </div>
+
+                  {/* Flow graph preview */}
+                  <div className="flex justify-center mb-5">
+                    <HarnessFlowGraph nodes={generatedDraft.nodes} edges={generatedDraft.edges} width={520} />
+                  </div>
+
+                  {/* Node list */}
+                  <div className="space-y-1.5 mb-6">
+                    {generatedDraft.nodes.map((n, i) => (
+                      <div key={n.id} className="flex items-center gap-3 px-3 py-2 rounded-lg"
+                        style={{ background: "var(--sidebar-bg)", border: "1px solid var(--border)" }}>
+                        <span className="text-[11px] font-mono w-5 text-center flex-none" style={{ color: "var(--text-tertiary)" }}>{i + 1}</span>
+                        <span className="text-[13px]">{n.kind === "subagent" ? "🤖" : n.kind === "tool" ? "⚙" : "📦"}</span>
+                        <span className="flex-1 text-[12.5px] font-medium" style={{ color: "var(--text-primary)" }}>{n.label ?? n.ref}</span>
+                        <span className="text-[10px] px-2 py-0.5 rounded-full" style={{ background: "var(--accent-light)", color: "var(--accent)" }}>{n.kind}</span>
+                        <span className="text-[10px] font-mono" style={{ color: "var(--text-tertiary)" }}>{n.ref}</span>
+                      </div>
+                    ))}
+                  </div>
+
+                  {/* Actions */}
+                  <div className="flex items-center gap-3">
                     <button onClick={handleSaveHarness}
                       className="px-5 py-2 rounded-lg text-[13px] font-medium"
                       style={{ background: "var(--accent)", color: "white" }}>
-                      💾 하네스로 저장
+                      💾 하네스 저장
                     </button>
-                    <button onClick={() => { setBuiltReport(null); setBuildLog([]); setBuildMeta(null); setProcessDesc(""); }}
+                    <button onClick={() => { setGeneratedDraft(null); setBuildError(null); }}
                       className="px-4 py-2 rounded-lg text-[13px]"
                       style={{ border: "1px solid var(--border)", color: "var(--text-secondary)" }}>
                       다시 빌드
@@ -2030,11 +2060,11 @@ function HarnessesTab({ harnesses, registry, model, onSaved, onNavigate, onRunIn
                   style={{ background: "transparent", color: "var(--text-primary)", fontFamily: "inherit" }} />
                 <div className="flex items-center justify-between px-3 pb-2 pt-1.5"
                   style={{ borderTop: "1px solid var(--border)", background: "#fafaf9" }}>
-                  <span className="text-[11px]" style={{ color: "var(--text-tertiary)" }}>Enter로 빌드 · Shift+Enter 줄바꿈</span>
+                  <span className="text-[11px]" style={{ color: "var(--text-tertiary)" }}>Enter로 생성 · Shift+Enter 줄바꿈</span>
                   <button onClick={handleBuild} disabled={!processDesc.trim() || isBuilding}
                     className="px-3 py-1 rounded-md text-[12px] font-medium"
                     style={{ background: processDesc.trim() && !isBuilding ? "var(--accent)" : "var(--border)", color: processDesc.trim() && !isBuilding ? "white" : "var(--text-tertiary)" }}>
-                    {isBuilding ? "빌드 중..." : "하네스 빌드"}
+                    {isBuilding ? "생성 중..." : "AI 하네스 생성"}
                   </button>
                 </div>
               </div>
