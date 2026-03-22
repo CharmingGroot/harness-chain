@@ -85,10 +85,10 @@ export async function executeHarness(
 // ── Prompt builder ────────────────────────────────────────────────────────────
 
 function buildPromptFromHarness(harness: HarnessDef): string {
-  const stepDescs = harness.steps.map((step, i) => {
-    if (step.kind === 'subagent') return `${i + 1}. 서브에이전트 '${step.ref}'에게 위임`;
-    if (step.kind === 'tool') return `${i + 1}. 도구 '${step.ref}' 실행`;
-    return `${i + 1}. 소스 '${step.ref}' 조회`;
+  const stepDescs = harness.nodes.map((node, i) => {
+    if (node.kind === 'subagent') return `${i + 1}. 서브에이전트 '${node.ref}'에게 위임`;
+    if (node.kind === 'tool') return `${i + 1}. 도구 '${node.ref}' 실행`;
+    return `${i + 1}. 소스 '${node.ref}' 조회`;
   });
 
   return [

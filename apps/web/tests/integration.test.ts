@@ -25,14 +25,20 @@ describe('Full harness lifecycle', () => {
     const harness = saveHarness({
       name: 'VIP 이탈 일일 분석',
       description: 'VIP 등급 이탈 위험 고객 매일 분석',
-      steps: [
+      nodes: [
         { id: 's1', kind: 'source', ref: 'pg-sandbox', label: 'DB 연결' },
         { id: 's2', kind: 'subagent', ref: agent.id, label: 'VIP 분석' },
         { id: 's3', kind: 'tool', ref: 'execute_query', label: '최종 집계' },
       ],
+      edges: [
+        { id: 'e0', from: '__start__', to: 's1' },
+        { id: 'e1', from: 's1', to: 's2' },
+        { id: 'e2', from: 's2', to: 's3' },
+        { id: 'e3', from: 's3', to: '__end__' },
+      ],
       schedule: { type: 'cron', cron: '0 9 * * *' },
     });
-    expect(harness.steps).toHaveLength(3);
+    expect(harness.nodes).toHaveLength(3);
 
     // 3. Create and complete a run
     const run = createRun(harness.id);
@@ -70,7 +76,7 @@ describe('Full harness lifecycle', () => {
     const h = saveHarness({
       name: '동시 실행 테스트',
       description: '',
-      steps: [],
+      nodes: [], edges: [],
       schedule: { type: 'once' },
     });
 
@@ -101,19 +107,27 @@ describe('Full harness lifecycle', () => {
     const h = saveHarness({
       name: '멀티 스텝 파이프라인',
       description: '소스 → 에이전트 → 도구 → 에이전트 → 도구',
-      steps: [
+      nodes: [
         { id: 's1', kind: 'source', ref: 'pg-sandbox', label: '소스 연결' },
         { id: 's2', kind: 'subagent', ref: agent1.id, label: '1차 분석' },
         { id: 's3', kind: 'tool', ref: 'execute_query', label: '데이터 수집' },
         { id: 's4', kind: 'subagent', ref: agent2.id, label: '2차 분석' },
         { id: 's5', kind: 'tool', ref: 'get_stats', label: '통계 수집' },
       ],
+      edges: [
+        { id: 'e0', from: '__start__', to: 's1' },
+        { id: 'e1', from: 's1', to: 's2' },
+        { id: 'e2', from: 's2', to: 's3' },
+        { id: 'e3', from: 's3', to: 's4' },
+        { id: 'e4', from: 's4', to: 's5' },
+        { id: 'e5', from: 's5', to: '__end__' },
+      ],
       schedule: { type: 'once' },
     });
 
     const loaded = listHarnesses().find(x => x.id === h.id);
-    expect(loaded?.steps).toHaveLength(5);
-    expect(loaded?.steps.map(s => s.kind)).toEqual(['source', 'subagent', 'tool', 'subagent', 'tool']);
+    expect(loaded?.nodes).toHaveLength(5);
+    expect(loaded?.nodes.map(s => s.kind)).toEqual(['source', 'subagent', 'tool', 'subagent', 'tool']);
   });
 });
 
@@ -121,7 +135,7 @@ describe('Harness data integrity', () => {
   it('harness IDs are truly unique across rapid creation', () => {
     const count = 20;
     const ids = Array.from({ length: count }, () =>
-      saveHarness({ name: `h${Math.random()}`, description: '', steps: [], schedule: { type: 'once' } }).id
+      saveHarness({ name: `h${Math.random()}`, description: '', nodes: [], edges: [], schedule: { type: 'once' } }).id
     );
     expect(new Set(ids).size).toBe(count);
   });
@@ -135,21 +149,21 @@ describe('Harness data integrity', () => {
   });
 
   it('run IDs are unique across rapid creation', () => {
-    const h = saveHarness({ name: 'run id test', description: '', steps: [], schedule: { type: 'once' } });
+    const h = saveHarness({ name: 'run id test', description: '', nodes: [], edges: [], schedule: { type: 'once' } });
     const count = 20;
     const ids = Array.from({ length: count }, () => createRun(h.id).id);
     expect(new Set(ids).size).toBe(count);
   });
 
   it('harness timestamps use ISO format', () => {
-    const h = saveHarness({ name: 'ts test', description: '', steps: [], schedule: { type: 'once' } });
+    const h = saveHarness({ name: 'ts test', description: '', nodes: [], edges: [], schedule: { type: 'once' } });
     expect(() => new Date(h.createdAt)).not.toThrow();
     expect(() => new Date(h.updatedAt)).not.toThrow();
     expect(h.createdAt).toMatch(/^\d{4}-\d{2}-\d{2}T/);
   });
 
   it('updatedAt changes after update but createdAt stays same', () => {
-    const h = saveHarness({ name: '시간 테스트', description: '', steps: [], schedule: { type: 'once' } });
+    const h = saveHarness({ name: '시간 테스트', description: '', nodes: [], edges: [], schedule: { type: 'once' } });
     const originalCreatedAt = h.createdAt;
     const originalUpdatedAt = h.updatedAt;
 
@@ -174,24 +188,30 @@ describe('Scenario: Financial analysis harnesses', () => {
 
   it('creates all financial scenario harnesses', () => {
     for (const scenario of financialScenarios) {
-      const steps = Array.from({ length: scenario.steps }, (_, i) => ({
+      const nodes = Array.from({ length: scenario.steps }, (_, i) => ({
         id: `s${i + 1}`,
         kind: i === 0 ? 'source' as const : 'tool' as const,
         ref: i === 0 ? 'pg-sandbox' : 'execute_query',
         label: `단계 ${i + 1}`,
       }));
+      const edges = nodes.length === 0 ? [] : [
+        { id: 'e_s', from: '__start__', to: nodes[0].id },
+        ...nodes.slice(0, -1).map((n, i) => ({ id: `e_${i}`, from: n.id, to: nodes[i + 1].id })),
+        { id: 'e_e', from: nodes[nodes.length - 1].id, to: '__end__' },
+      ];
 
       const h = saveHarness({
         name: scenario.name,
         description: scenario.description,
-        steps,
+        nodes,
+        edges,
         schedule: scenario.schedule === 'cron'
           ? { type: 'cron', cron: '0 9 * * *' }
           : { type: 'once' },
       });
 
       expect(h.id).toBeTruthy();
-      expect(h.steps).toHaveLength(scenario.steps);
+      expect(h.nodes).toHaveLength(scenario.steps);
     }
 
     expect(listHarnesses()).toHaveLength(financialScenarios.length);
@@ -199,20 +219,25 @@ describe('Scenario: Financial analysis harnesses', () => {
 
   it('all harnesses have valid step references', () => {
     for (const scenario of financialScenarios) {
-      const steps = Array.from({ length: scenario.steps }, (_, i) => ({
+      const nodes = Array.from({ length: scenario.steps }, (_, i) => ({
         id: `s${i + 1}`,
         kind: 'tool' as const,
         ref: 'execute_query',
       }));
-      saveHarness({ name: scenario.name, description: scenario.description, steps, schedule: { type: 'once' } });
+      const edges = nodes.length === 0 ? [] : [
+        { id: 'e_s', from: '__start__', to: nodes[0].id },
+        ...nodes.slice(0, -1).map((n, i) => ({ id: `e_${i}`, from: n.id, to: nodes[i + 1].id })),
+        { id: 'e_e', from: nodes[nodes.length - 1].id, to: '__end__' },
+      ];
+      saveHarness({ name: scenario.name, description: scenario.description, nodes, edges, schedule: { type: 'once' } });
     }
 
     const harnesses = listHarnesses();
     for (const h of harnesses) {
-      for (const step of h.steps) {
-        expect(step.id).toBeTruthy();
-        expect(step.kind).toMatch(/^(source|tool|subagent)$/);
-        expect(step.ref).toBeTruthy();
+      for (const node of h.nodes) {
+        expect(node.id).toBeTruthy();
+        expect(node.kind).toMatch(/^(source|tool|subagent)$/);
+        expect(node.ref).toBeTruthy();
       }
     }
   });

@@ -7,52 +7,62 @@ import {
   saveSubAgent, createRun, updateRun, listRuns,
 } from '../lib/store';
 
+function makeLinear(steps: { id: string; kind: 'source' | 'tool' | 'subagent'; ref: string; label?: string }[]) {
+  const nodes = steps;
+  const edges = steps.length === 0 ? [] : [
+    { id: 'e_s', from: '__start__', to: steps[0].id },
+    ...steps.slice(0, -1).map((s, i) => ({ id: `e_${i}`, from: s.id, to: steps[i + 1].id })),
+    { id: 'e_e', from: steps[steps.length - 1].id, to: '__end__' },
+  ];
+  return { nodes, edges };
+}
+
 const SCENARIOS = [
   {
     name: 'VIP 이탈 위험 일일 리포트',
     description: '매일 오전 9시 VIP 고객 이탈 위험 분석',
-    steps: [
+    ...makeLinear([
       { id: 's1', kind: 'source' as const, ref: 'pg-sandbox', label: 'DB 조회' },
       { id: 's2', kind: 'tool' as const, ref: 'execute_query', label: 'VIP 이탈 쿼리' },
       { id: 's3', kind: 'tool' as const, ref: 'get_schema', label: '스키마 확인' },
-    ],
+    ]),
     schedule: { type: 'cron' as const, cron: '0 9 * * *' },
   },
   {
     name: '이상 거래 탐지 보고서',
     description: '비정상 거래 패턴 및 사기 의심 거래 식별',
-    steps: [
+    ...makeLinear([
       { id: 's1', kind: 'tool' as const, ref: 'execute_query', label: '이상 거래 탐지 쿼리' },
       { id: 's2', kind: 'tool' as const, ref: 'explain_query', label: '쿼리 성능 분석' },
-    ],
+    ]),
     schedule: { type: 'cron' as const, cron: '0 */6 * * *' },
   },
   {
     name: 'DB 쿼리 성능 최적화 보고서',
     description: '인덱스 사용률 및 슬로우 쿼리 분석',
-    steps: [
+    ...makeLinear([
       { id: 's1', kind: 'tool' as const, ref: 'get_stats', label: 'DB 통계 조회' },
       { id: 's2', kind: 'tool' as const, ref: 'explain_query', label: 'EXPLAIN 분석' },
       { id: 's3', kind: 'tool' as const, ref: 'get_schema', label: '인덱스 현황' },
-    ],
+    ]),
     schedule: { type: 'once' as const },
   },
   {
     name: '대출 부실 위험 주간 분석',
     description: '대출 연체 현황 및 충당금 권고',
-    steps: [
+    ...makeLinear([
       { id: 's1', kind: 'tool' as const, ref: 'execute_query', label: '연체 대출 조회' },
       { id: 's2', kind: 'tool' as const, ref: 'get_table_sample', label: '대출 샘플' },
-    ],
+    ]),
     schedule: { type: 'cron' as const, cron: '0 8 * * 1' },
   },
   {
     name: '투자 포트폴리오 손익 월간 분석',
     description: '자산 유형별 수익률 및 손익 현황',
-    steps: [
+    ...makeLinear([
       { id: 's1', kind: 'tool' as const, ref: 'execute_query', label: '포트폴리오 조회' },
       { id: 's2', kind: 'tool' as const, ref: 'execute_query', label: '손익 계산' },
-    ],
+    ]),
     schedule: { type: 'cron' as const, cron: '0 9 1 * *' },
   },
 ];
@@ -82,25 +92,27 @@ describe('Harness scenarios — creation', () => {
     }
   });
 
-  it('harness steps are preserved correctly', () => {
+  it('harness nodes are preserved correctly', () => {
     const h = saveHarness(SCENARIOS[0]);
     const loaded = getHarness(h.id);
-    expect(loaded?.steps).toHaveLength(3);
-    expect(loaded?.steps[0].kind).toBe('source');
-    expect(loaded?.steps[1].kind).toBe('tool');
+    expect(loaded?.nodes).toHaveLength(3);
+    expect(loaded?.nodes[0].kind).toBe('source');
+    expect(loaded?.nodes[1].kind).toBe('tool');
   });
 });
 
 describe('Harness scenarios — lifecycle', () => {
-  it('harness can be updated with new steps after creation', () => {
+  it('harness can be updated with new nodes after creation', () => {
     const h = saveHarness(SCENARIOS[2]);
-    const updated = updateHarness(h.id, {
-      steps: [
-        ...h.steps,
-        { id: 's4', kind: 'tool', ref: 'get_table_sample', label: '신규 단계' },
-      ],
-    });
-    expect(updated?.steps).toHaveLength(4);
+    const newNode = { id: 's4', kind: 'tool' as const, ref: 'get_table_sample', label: '신규 단계' };
+    // Remove the old __end__ edge and re-route: s3→s4→__end__
+    const updatedEdges = [
+      ...h.edges.filter(e => e.to !== '__end__'),
+      { id: 'e_new', from: 's3', to: 's4' },
+      { id: 'e_end', from: 's4', to: '__end__' },
+    ];
+    const updated = updateHarness(h.id, { nodes: [...h.nodes, newNode], edges: updatedEdges });
+    expect(updated?.nodes).toHaveLength(4);
   });
 
   it('harness schedule can be changed from once to cron', () => {
@@ -188,14 +200,12 @@ describe('SubAgent + Harness integration', () => {
     const h = saveHarness({
       name: 'VIP 이탈 분석 (에이전트 기반)',
       description: '서브에이전트가 VIP 이탈 위험 분석 전담',
-      steps: [
-        { id: 's1', kind: 'subagent', ref: agent.id, label: 'churn_analyzer' },
-      ],
+      ...makeLinear([{ id: 's1', kind: 'subagent', ref: agent.id, label: 'churn_analyzer' }]),
       schedule: { type: 'once' },
     });
 
-    expect(h.steps[0].ref).toBe(agent.id);
-    expect(getHarness(h.id)?.steps[0].kind).toBe('subagent');
+    expect(h.nodes[0].ref).toBe(agent.id);
+    expect(getHarness(h.id)?.nodes[0].kind).toBe('subagent');
   });
 
   it('creates multi-subagent harness with parallel analysis', () => {
@@ -220,15 +230,15 @@ describe('SubAgent + Harness integration', () => {
     const h = saveHarness({
       name: '금융 통합 분석 파이프라인',
       description: '이상 거래 탐지 + 보고서 생성 파이프라인',
-      steps: [
+      ...makeLinear([
         { id: 's1', kind: 'subagent', ref: fraudAgent.id, label: '이상 거래 탐지' },
         { id: 's2', kind: 'subagent', ref: reportAgent.id, label: '보고서 작성' },
-      ],
+      ]),
       schedule: { type: 'cron', cron: '0 6 * * *' },
     });
 
-    expect(h.steps).toHaveLength(2);
-    expect(h.steps[0].ref).toBe(fraudAgent.id);
-    expect(h.steps[1].ref).toBe(reportAgent.id);
+    expect(h.nodes).toHaveLength(2);
+    expect(h.nodes[0].ref).toBe(fraudAgent.id);
+    expect(h.nodes[1].ref).toBe(reportAgent.id);
   });
 });

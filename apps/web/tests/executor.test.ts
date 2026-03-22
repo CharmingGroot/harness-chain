@@ -66,7 +66,8 @@ describe('executeHarness', () => {
     const h = saveHarness({
       name: '데이터 분석 하네스',
       description: '트랜잭션 분석',
-      steps: [{ id: 's1', kind: 'tool', ref: 'execute_query' }],
+      nodes: [{ id: 's1', kind: 'tool', ref: 'execute_query' }],
+      edges: [{ id: 'e0', from: '__start__', to: 's1' }, { id: 'e1', from: 's1', to: '__end__' }],
       schedule: { type: 'once' },
     });
 
@@ -81,7 +82,7 @@ describe('executeHarness', () => {
     const h = saveHarness({
       name: '스토어 기록 테스트',
       description: '',
-      steps: [],
+      nodes: [], edges: [],
       schedule: { type: 'once' },
     });
 
@@ -97,7 +98,7 @@ describe('executeHarness', () => {
     const h = saveHarness({
       name: '실패 시나리오',
       description: '오케스트레이터 오류',
-      steps: [],
+      nodes: [], edges: [],
       schedule: { type: 'once' },
     });
 
@@ -114,7 +115,7 @@ describe('executeHarness', () => {
     const h = saveHarness({
       name: '커스텀 프롬프트 테스트',
       description: '',
-      steps: [],
+      nodes: [], edges: [],
       schedule: { type: 'once' },
     });
 
@@ -127,7 +128,7 @@ describe('executeHarness', () => {
     const h = saveHarness({
       name: 'meta 확인 테스트',
       description: '',
-      steps: [],
+      nodes: [], edges: [],
       schedule: { type: 'once' },
     });
 
@@ -137,14 +138,14 @@ describe('executeHarness', () => {
   });
 
   it('calls markRunning at execution start', async () => {
-    const h = saveHarness({ name: 'Redis 마킹 테스트', description: '', steps: [], schedule: { type: 'once' } });
+    const h = saveHarness({ name: 'Redis 마킹 테스트', description: '', nodes: [], edges: [], schedule: { type: 'once' } });
     const run = await executeHarness(h.id);
     expect(mockMarkRunning).toHaveBeenCalledOnce();
     expect(mockMarkRunning).toHaveBeenCalledWith(run.id, h.id);
   });
 
   it('calls clearRunning after successful completion', async () => {
-    const h = saveHarness({ name: '완료 후 Redis 정리', description: '', steps: [], schedule: { type: 'once' } });
+    const h = saveHarness({ name: '완료 후 Redis 정리', description: '', nodes: [], edges: [], schedule: { type: 'once' } });
     const run = await executeHarness(h.id);
     expect(run.status).toBe('completed');
     expect(mockClearRunning).toHaveBeenCalledOnce();
@@ -153,7 +154,7 @@ describe('executeHarness', () => {
 
   it('calls clearRunning even when orchestrator throws', async () => {
     mockRun.mockRejectedValueOnce(new Error('오케스트레이터 폭발'));
-    const h = saveHarness({ name: '실패해도 Redis 정리', description: '', steps: [], schedule: { type: 'once' } });
+    const h = saveHarness({ name: '실패해도 Redis 정리', description: '', nodes: [], edges: [], schedule: { type: 'once' } });
     const run = await executeHarness(h.id);
     expect(run.status).toBe('failed');
     expect(mockClearRunning).toHaveBeenCalledOnce();
@@ -161,14 +162,14 @@ describe('executeHarness', () => {
   });
 
   it('always calls source.close() in finally — success path', async () => {
-    const h = saveHarness({ name: 'source.close 성공', description: '', steps: [], schedule: { type: 'once' } });
+    const h = saveHarness({ name: 'source.close 성공', description: '', nodes: [], edges: [], schedule: { type: 'once' } });
     await executeHarness(h.id);
     expect(mockClose).toHaveBeenCalledOnce();
   });
 
   it('always calls source.close() in finally — failure path', async () => {
     mockRun.mockRejectedValueOnce(new Error('crash'));
-    const h = saveHarness({ name: 'source.close 실패', description: '', steps: [], schedule: { type: 'once' } });
+    const h = saveHarness({ name: 'source.close 실패', description: '', nodes: [], edges: [], schedule: { type: 'once' } });
     await executeHarness(h.id);
     expect(mockClose).toHaveBeenCalledOnce();
   });

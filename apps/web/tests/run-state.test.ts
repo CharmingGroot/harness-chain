@@ -138,7 +138,7 @@ describe('recoverOrphanedRuns', () => {
   });
 
   it('marks running-but-not-in-Redis runs as failed', async () => {
-    const h = saveHarness({ name: '고아 런 테스트', description: '', steps: [], schedule: { type: 'once' } });
+    const h = saveHarness({ name: '고아 런 테스트', description: '', nodes: [], edges: [], schedule: { type: 'once' } });
     const run = createRun(h.id);
     // Simulate file store shows running
     const { updateRun } = await import('../lib/store');
@@ -157,7 +157,7 @@ describe('recoverOrphanedRuns', () => {
   });
 
   it('does NOT mark a run as failed if it is still active in Redis', async () => {
-    const h = saveHarness({ name: '활성 런 테스트', description: '', steps: [], schedule: { type: 'once' } });
+    const h = saveHarness({ name: '활성 런 테스트', description: '', nodes: [], edges: [], schedule: { type: 'once' } });
     const run = createRun(h.id);
     const { updateRun, getRun } = await import('../lib/store');
     updateRun(run.id, { status: 'running' });
@@ -172,7 +172,7 @@ describe('recoverOrphanedRuns', () => {
   });
 
   it('recovers multiple orphans in one pass', async () => {
-    const h = saveHarness({ name: '복수 고아 테스트', description: '', steps: [], schedule: { type: 'once' } });
+    const h = saveHarness({ name: '복수 고아 테스트', description: '', nodes: [], edges: [], schedule: { type: 'once' } });
     const { updateRun } = await import('../lib/store');
     const run1 = createRun(h.id);
     const run2 = createRun(h.id);

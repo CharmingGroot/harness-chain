@@ -14,20 +14,33 @@ import { listSubAgents } from './store';
 // ── Provider factory ──────────────────────────────────────────────────────────
 
 function resolveProvider(model: string, maxTokens: number): ILlmProvider {
-  const isOpenAI = model.startsWith('gpt-') || model.startsWith('o1') || model.startsWith('o3');
+  const anthropicKey = process.env.ANTHROPIC_API_KEY;
+  const openaiKey = process.env.OPENAI_API_KEY;
+
+  const prefersOpenAI = model.startsWith('gpt-') || model.startsWith('o1') || model.startsWith('o3');
+
+  // Fallback: use whichever key is available if the preferred one is missing
+  let useOpenAI = prefersOpenAI;
+  let resolvedModel = model;
+  if (prefersOpenAI && !openaiKey && anthropicKey) {
+    useOpenAI = false;
+    resolvedModel = 'claude-haiku-4-5-20251001';
+  } else if (!prefersOpenAI && !anthropicKey && openaiKey) {
+    useOpenAI = true;
+    resolvedModel = 'gpt-4o-mini';
+  }
+
   const config: ProviderConfig = {
-    providerId: isOpenAI ? 'openai' : 'claude',
-    model,
+    providerId: useOpenAI ? 'openai' : 'claude',
+    model: resolvedModel,
     auth: {
       type: 'api-key',
-      apiKey: isOpenAI
-        ? (process.env.OPENAI_API_KEY ?? '')
-        : (process.env.ANTHROPIC_API_KEY ?? ''),
+      apiKey: useOpenAI ? (openaiKey ?? '') : (anthropicKey ?? ''),
     },
     maxTokens,
     temperature: 0.7,
   };
-  return isOpenAI ? new OpenAIProvider(config) : new ClaudeProvider(config);
+  return useOpenAI ? new OpenAIProvider(config) : new ClaudeProvider(config);
 }
 
 export interface OrchestratorConfig {

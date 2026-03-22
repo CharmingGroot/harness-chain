@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useRef, useCallback } from "react";
+import React, { useState, useEffect, useRef, useCallback } from "react";
 import type { AnalyzeEvent } from "@/lib/types";
 import { renderMarkdown } from "@/lib/markdown";
 
@@ -9,10 +9,18 @@ import { renderMarkdown } from "@/lib/markdown";
 interface Source { id: string; name: string; type: string; description: string; status: string; }
 interface Tool { id: string; name: string; category: string; description: string; comingSoon?: boolean; }
 interface SubAgent { id: string; name: string; description: string; tools: string[]; systemPrompt: string; skills?: string; rules?: string; model: string; createdAt: string; }
+interface HarnessNode {
+  id: string; kind: "subagent" | "tool" | "source"; ref: string; label?: string;
+}
+type HarnessStep = HarnessNode;
+interface HarnessEdge {
+  id: string; from: string; to: string; label?: string; condition?: string;
+}
 interface RealHarness {
   id: string; name: string; description: string;
   schedule: { type: "once" | "cron"; cron?: string };
-  steps: { id: string; kind: "subagent" | "tool" | "source"; ref: string; label?: string }[];
+  nodes: HarnessNode[];
+  edges: HarnessEdge[];
   createdAt: string; updatedAt: string;
   runs?: { id: string; status: string; startedAt: string; completedAt?: string; durationMs?: number }[];
 }
@@ -796,6 +804,430 @@ function NoChatState({ onCreateSession }: { onCreateSession: () => void }) {
   );
 }
 
+// ── Harness Flow Graph (LangGraph-style SVG) ──────────────────────────────────
+
+const FLOW_NODE_W = 156;
+const FLOW_NODE_H = 44;
+const FLOW_LAYER_GAP = 72;
+const FLOW_NODE_H_GAP = 28;
+
+interface FlowNode {
+  id: string;
+  x: number;
+  y: number;
+  label: string;
+  kind: "start" | "end" | HarnessNode["kind"];
+}
+
+/**
+ * Layout algorithm: topological layer assignment from the actual edge graph.
+ * Nodes at the same "depth" (same longest-path from __start__) share a row.
+ */
+function computeFlowLayout(nodes: HarnessNode[], edges: HarnessEdge[], svgW: number): {
+  flowNodes: FlowNode[];
+  svgHeight: number;
+} {
+  // Build all IDs including virtual __start__ / __end__
+  const allIds = ["__start__", ...nodes.map(n => n.id), "__end__"];
+
+  // Compute layer depth via BFS from __start__
+  const depth = new Map<string, number>();
+  depth.set("__start__", 0);
+  const queue = ["__start__"];
+  while (queue.length) {
+    const cur = queue.shift()!;
+    const curDepth = depth.get(cur) ?? 0;
+    edges
+      .filter(e => e.from === cur)
+      .forEach(e => {
+        const existing = depth.get(e.to) ?? -1;
+        if (existing < curDepth + 1) {
+          depth.set(e.to, curDepth + 1);
+          queue.push(e.to);
+        }
+      });
+  }
+  // Nodes with no depth assigned (isolated) go to depth 1
+  allIds.forEach(id => { if (!depth.has(id)) depth.set(id, 1); });
+
+  // Group by depth
+  const byLayer = new Map<number, string[]>();
+  allIds.forEach(id => {
+    const d = depth.get(id) ?? 0;
+    if (!byLayer.has(d)) byLayer.set(d, []);
+    byLayer.get(d)!.push(id);
+  });
+
+  const sortedLayers = [...byLayer.entries()].sort(([a], [b]) => a - b);
+  const nodeKind = (id: string): FlowNode["kind"] => {
+    if (id === "__start__") return "start";
+    if (id === "__end__") return "end";
+    return nodes.find(n => n.id === id)?.kind ?? "tool";
+  };
+  const nodeLabel = (id: string) => {
+    if (id === "__start__") return "__start__";
+    if (id === "__end__") return "__end__";
+    const n = nodes.find(x => x.id === id);
+    return n?.label ?? n?.ref ?? id;
+  };
+
+  const TOP_PAD = 32;
+  const flowNodes: FlowNode[] = [];
+  sortedLayers.forEach(([, ids], li) => {
+    const cy = TOP_PAD + li * (FLOW_NODE_H + FLOW_LAYER_GAP) + FLOW_NODE_H / 2;
+    const totalW = ids.length * FLOW_NODE_W + (ids.length - 1) * FLOW_NODE_H_GAP;
+    const ox = (svgW - totalW) / 2;
+    ids.forEach((id, ni) => {
+      flowNodes.push({
+        id,
+        x: ox + ni * (FLOW_NODE_W + FLOW_NODE_H_GAP) + FLOW_NODE_W / 2,
+        y: cy,
+        label: nodeLabel(id),
+        kind: nodeKind(id),
+      });
+    });
+  });
+
+  const svgHeight = TOP_PAD + sortedLayers.length * (FLOW_NODE_H + FLOW_LAYER_GAP) - FLOW_LAYER_GAP + TOP_PAD;
+  return { flowNodes, svgHeight };
+}
+
+function HarnessFlowGraph({
+  nodes,
+  edges,
+  activeNodeId,
+  errorNodeIds = [],
+  doneNodeIds = [],
+  isStreaming = false,
+  width = 480,
+}: {
+  nodes: HarnessNode[];
+  edges: HarnessEdge[];
+  activeNodeId?: string;
+  errorNodeIds?: string[];
+  doneNodeIds?: string[];
+  isStreaming?: boolean;
+  width?: number;
+}) {
+  const { flowNodes, svgHeight } = computeFlowLayout(nodes, edges, width);
+
+  const nodeColors = (n: FlowNode) => {
+    if (n.kind === "start") return { fill: "#f0fdfa", stroke: "#2dd4bf", textColor: "#0d9488", dash: "5 3" };
+    if (n.kind === "end")   return { fill: "#0d9488", stroke: "#0d9488", textColor: "#ffffff", dash: "" };
+    if (errorNodeIds.includes(n.id)) return { fill: "#fef2f2", stroke: "#f87171", textColor: "#b91c1c", dash: "" };
+    if (doneNodeIds.includes(n.id))  return { fill: "#dcfce7", stroke: "#4ade80", textColor: "#15803d", dash: "" };
+    if (n.id === activeNodeId)       return { fill: "#ccfbf1", stroke: "#14b8a6", textColor: "#0f766e", dash: "" };
+    return { fill: "#f0fdfa", stroke: "#2dd4bf", textColor: "#134e4a", dash: "" };
+  };
+
+  const getFlowNode = (id: string) => flowNodes.find(n => n.id === id);
+  const kindIcon = (kind: FlowNode["kind"]) =>
+    kind === "subagent" ? "🤖 " : kind === "tool" ? "⚙ " : kind === "source" ? "📦 " : "";
+
+  const halfH = FLOW_NODE_H / 2;
+  const ellipseRY = 18;
+
+  return (
+    <svg width={width} height={svgHeight} style={{ display: "block", overflow: "visible" }}>
+      <defs>
+        <marker id="hfg-arrow" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto">
+          <polygon points="0 0, 8 3, 0 6" fill="#94a3b8" />
+        </marker>
+      </defs>
+
+      {/* Edges — rendered from actual HarnessEdge data */}
+      {edges.map((edge) => {
+        const from = getFlowNode(edge.from);
+        const to   = getFlowNode(edge.to);
+        if (!from || !to) return null;
+        const y1 = from.kind === "start" ? from.y + ellipseRY : from.y + halfH;
+        const y2 = to.kind   === "end"   ? to.y   - ellipseRY : to.y   - halfH;
+        const dy = y2 - y1;
+        const isDashed = !!edge.condition;
+        // Bezier curve; offset horizontally for back-edges (loops)
+        const isBackEdge = (to.y ?? 0) <= (from.y ?? 0);
+        const d = isBackEdge
+          ? `M${from.x},${y1} C${from.x - 80},${y1 + 40} ${to.x - 80},${y2 - 40} ${to.x},${y2}`
+          : `M${from.x},${y1} C${from.x},${y1 + dy * 0.55} ${to.x},${y2 - dy * 0.55} ${to.x},${y2}`;
+        return (
+          <g key={edge.id}>
+            <path d={d} fill="none" stroke="#94a3b8" strokeWidth={1.5}
+              strokeDasharray={isDashed ? "5 3" : ""}
+              markerEnd="url(#hfg-arrow)" />
+            {edge.label && (
+              <text x={(from.x + to.x) / 2 + (isBackEdge ? -50 : 8)}
+                y={(y1 + y2) / 2}
+                fontSize={10} fill="#64748b" fontStyle="italic">
+                {edge.label}
+              </text>
+            )}
+          </g>
+        );
+      })}
+
+      {/* Nodes */}
+      {flowNodes.map(node => {
+        const c = nodeColors(node);
+        const isActive = node.id === activeNodeId && isStreaming;
+        const truncLabel = node.label.length > 17 ? node.label.slice(0, 16) + "…" : node.label;
+
+        if (node.kind === "start" || node.kind === "end") {
+          return (
+            <g key={node.id}>
+              <ellipse cx={node.x} cy={node.y} rx={62} ry={ellipseRY}
+                fill={c.fill} stroke={c.stroke} strokeWidth={1.5} strokeDasharray={c.dash} />
+              <text x={node.x} y={node.y} textAnchor="middle" dominantBaseline="middle"
+                fontSize={12} fontFamily="monospace" fill={c.textColor} fontWeight={600}>
+                {node.label}
+              </text>
+            </g>
+          );
+        }
+
+        return (
+          <g key={node.id} style={isActive ? { animation: "pulse 1.5s infinite" } : {}}>
+            <rect x={node.x - FLOW_NODE_W / 2} y={node.y - halfH}
+              width={FLOW_NODE_W} height={FLOW_NODE_H} rx={8}
+              fill={c.fill} stroke={c.stroke} strokeWidth={1.5} strokeDasharray={c.dash} />
+            {errorNodeIds.includes(node.id) && (
+              <circle cx={node.x + FLOW_NODE_W / 2 - 10} cy={node.y - halfH + 10} r={5} fill="#f87171" />
+            )}
+            {doneNodeIds.includes(node.id) && (
+              <circle cx={node.x + FLOW_NODE_W / 2 - 10} cy={node.y - halfH + 10} r={5} fill="#4ade80" />
+            )}
+            {isActive && (
+              <circle cx={node.x + FLOW_NODE_W / 2 - 10} cy={node.y - halfH + 10} r={5} fill="#14b8a6" />
+            )}
+            <text x={node.x - FLOW_NODE_W / 2 + 12} y={node.y} dominantBaseline="middle"
+              fontSize={13} fill={c.textColor}>
+              {kindIcon(node.kind)}
+            </text>
+            <text x={node.x + 10} y={node.y} textAnchor="middle" dominantBaseline="middle"
+              fontSize={12} fill={c.textColor} fontWeight={500}>
+              {truncLabel}
+            </text>
+          </g>
+        );
+      })}
+    </svg>
+  );
+}
+
+// ── Harness Detail Modal ───────────────────────────────────────────────────────
+
+function HarnessDetailModal({
+  harness,
+  onClose,
+  onRun,
+}: {
+  harness: RealHarness;
+  onClose: () => void;
+  onRun: (h: RealHarness) => void;
+}) {
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center"
+      style={{ background: "rgba(0,0,0,0.5)" }}
+      onClick={e => { if (e.target === e.currentTarget) onClose(); }}>
+      <div className="rounded-2xl overflow-hidden flex flex-col"
+        style={{ background: "var(--content-bg)", border: "1px solid var(--border)", width: 580, maxHeight: "88vh" }}>
+        {/* Header */}
+        <div className="flex items-center gap-3 px-6 py-4"
+          style={{ borderBottom: "1px solid var(--border)", background: "var(--sidebar-bg)" }}>
+          <div className="text-xl">{harness.schedule.type === "cron" ? "⏰" : "▷"}</div>
+          <div className="flex-1 min-w-0">
+            <div className="text-[15px] font-semibold" style={{ color: "var(--text-primary)" }}>{harness.name}</div>
+            {harness.description && (
+              <div className="text-[12px] mt-0.5" style={{ color: "var(--text-secondary)" }}>{harness.description}</div>
+            )}
+          </div>
+          <div className="flex items-center gap-2">
+            <button onClick={() => onRun(harness)}
+              className="px-4 py-1.5 rounded-lg text-[13px] font-medium"
+              style={{ background: "var(--accent)", color: "white" }}>
+              ▶ 실행
+            </button>
+            <button onClick={onClose}
+              className="w-7 h-7 flex items-center justify-center rounded-lg text-[13px]"
+              style={{ background: "var(--sidebar-bg)", border: "1px solid var(--border)", color: "var(--text-secondary)" }}>
+              ✕
+            </button>
+          </div>
+        </div>
+
+        {/* Meta */}
+        <div className="px-6 py-3 flex items-center gap-4 text-[11px]"
+          style={{ borderBottom: "1px solid var(--border)", color: "var(--text-tertiary)" }}>
+          <span>{harness.schedule.type === "cron" ? `크론: ${harness.schedule.cron}` : "즉시 실행"}</span>
+          <span>·</span>
+          <span>{harness.nodes.length}단계</span>
+          <span>·</span>
+          <span>생성: {new Date(harness.createdAt).toLocaleDateString("ko-KR")}</span>
+        </div>
+
+        {/* Flow graph */}
+        <div className="flex-1 overflow-y-auto px-6 py-6 flex flex-col items-center"
+          style={{ background: "var(--content-bg)" }}>
+          {harness.nodes.length === 0 ? (
+            <div className="text-[13px] py-12" style={{ color: "var(--text-tertiary)" }}>단계가 없습니다.</div>
+          ) : (
+            <HarnessFlowGraph nodes={harness.nodes} edges={harness.edges} width={520} />
+          )}
+
+          {/* Step list */}
+          <div className="w-full mt-6">
+            <div className="text-[11px] font-medium uppercase tracking-wider mb-3"
+              style={{ color: "var(--text-tertiary)" }}>단계 상세</div>
+            <div className="space-y-2">
+              {harness.nodes.map((step, i) => (
+                <div key={step.id} className="flex items-center gap-3 px-3 py-2 rounded-lg"
+                  style={{ background: "var(--sidebar-bg)", border: "1px solid var(--border)" }}>
+                  <span className="text-[11px] font-mono w-5 text-center flex-none"
+                    style={{ color: "var(--text-tertiary)" }}>{i + 1}</span>
+                  <span className="text-[13px]">
+                    {step.kind === "subagent" ? "🤖" : step.kind === "tool" ? "⚙" : "📦"}
+                  </span>
+                  <span className="flex-1 text-[12.5px] font-medium" style={{ color: "var(--text-primary)" }}>
+                    {step.label ?? step.ref}
+                  </span>
+                  <span className="text-[11px] px-2 py-0.5 rounded-full"
+                    style={{ background: "var(--accent-light)", color: "var(--accent)" }}>
+                    {step.kind}
+                  </span>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── Monitor Card — utilities & sub-components ─────────────────────────────────
+type StepStatus = "pending" | "active" | "done" | "error";
+
+/** Maps a harness step to the tool-call name the orchestrator will emit. */
+function getStepToolName(step: HarnessStep): string {
+  if (step.kind === "subagent") return `subagent_${step.ref}`;
+  return step.ref; // tool and source steps: ref IS the tool name
+}
+
+/** Computes per-step status from the accumulated log entries. */
+function useHarnessStepStates(
+  steps: HarnessStep[],
+  logs: LogEntry[],
+  isStreaming: boolean
+): { step: HarnessStep; status: StepStatus }[] {
+  const calledTools = new Set(
+    logs.filter(l => l.kind === "tool_call").map(l => (l as Extract<LogEntry, { kind: "tool_call" }>).tool)
+  );
+  const completedTools = new Set(
+    logs.filter(l => l.kind === "tool_result").map(l => (l as Extract<LogEntry, { kind: "tool_result" }>).tool)
+  );
+  const erroredTools = new Set(
+    logs
+      .filter(l => l.kind === "tool_result" && !(l as Extract<LogEntry, { kind: "tool_result" }>).success)
+      .map(l => (l as Extract<LogEntry, { kind: "tool_result" }>).tool)
+  );
+  const lastToolCall = [...logs].reverse().find(l => l.kind === "tool_call") as Extract<LogEntry, { kind: "tool_call" }> | undefined;
+
+  return steps.map(step => {
+    const toolName = getStepToolName(step);
+    const label = step.label ?? step.ref;
+    // Match by canonical tool name OR label/ref substring (fallback for source steps)
+    const matches = (t: string) =>
+      t === toolName || t === label || t.includes(step.ref) || step.ref.includes(t);
+
+    if ([...erroredTools].some(matches)) return { step, status: "error" as StepStatus };
+    if ([...completedTools].some(matches)) return { step, status: "done" as StepStatus };
+    if (isStreaming && lastToolCall && matches(lastToolCall.tool)) return { step, status: "active" as StepStatus };
+    if ([...calledTools].some(matches)) return { step, status: "active" as StepStatus };
+    return { step, status: "pending" as StepStatus };
+  });
+}
+
+/** Pure UI component: renders the node→arrow→node flow graph (vertical or horizontal). */
+function HarnessStepGraph({
+  steps,
+  states,
+  isStreaming,
+  layout = "vertical",
+}: {
+  steps: HarnessStep[];
+  states: { step: HarnessStep; status: StepStatus }[];
+  isStreaming: boolean;
+  layout?: "vertical" | "horizontal";
+}) {
+  const kindIcon = (kind: HarnessStep["kind"]) =>
+    kind === "subagent" ? "🤖" : kind === "tool" ? "⚙" : "📦";
+
+  const nodeStyle = (status: StepStatus): React.CSSProperties => {
+    if (status === "done")   return { background: "#f0fdf4", border: "1px solid #86efac", color: "#22c55e" };
+    if (status === "error")  return { background: "#fef2f2", border: "1px solid #fca5a5", color: "#ef4444" };
+    if (status === "active") return { background: "var(--accent-light)", border: "1px solid var(--accent)", color: "var(--accent)" };
+    return { background: "var(--sidebar-bg)", border: "1px solid var(--border)", color: "var(--text-tertiary)" };
+  };
+
+  if (layout === "horizontal") {
+    return (
+      <div className="flex items-center flex-wrap gap-y-2">
+        {states.map(({ step, status }, i) => {
+          const label = step.label ?? step.ref;
+          const style = nodeStyle(status);
+          return (
+            <React.Fragment key={step.id}>
+              {i > 0 && (
+                <div className="flex items-center px-1.5" style={{ color: "var(--text-tertiary)", fontSize: 14 }}>→</div>
+              )}
+              <div
+                className={`flex items-center gap-1.5 px-2.5 py-1 rounded-lg${status === "active" ? " animate-pulse" : ""}`}
+                style={style}
+              >
+                <span className="text-[12px]">{kindIcon(step.kind)}</span>
+                <span className="text-[11.5px] font-medium whitespace-nowrap">{label}</span>
+                {status === "done"   && <span className="text-[10px]">✓</span>}
+                {status === "error"  && <span className="text-[10px]">✗</span>}
+                {status === "active" && isStreaming && <span className="spinner flex-none" style={{ width: 7, height: 7 }} />}
+              </div>
+            </React.Fragment>
+          );
+        })}
+      </div>
+    );
+  }
+
+  return (
+    <div>
+      {states.map(({ step, status }, i) => {
+        const label = step.label ?? step.ref;
+        const style = nodeStyle(status);
+        return (
+          <div key={step.id} className="flex flex-col items-stretch">
+            {/* Connector arrow between nodes */}
+            {i > 0 && (
+              <div className="flex flex-col items-center py-0.5">
+                <div style={{ width: 1, height: 10, background: "var(--border)" }} />
+                <div style={{ width: 0, height: 0, borderLeft: "4px solid transparent", borderRight: "4px solid transparent", borderTop: "5px solid var(--border)" }} />
+              </div>
+            )}
+            {/* Node */}
+            <div
+              className={`flex items-center gap-2 px-2.5 py-1.5 rounded-lg${status === "active" ? " animate-pulse" : ""}`}
+              style={style}
+            >
+              <span className="text-[12px]">{kindIcon(step.kind)}</span>
+              <span className="flex-1 text-[11.5px] font-medium truncate">{label}</span>
+              {status === "done"   && <span className="text-[10px]">✓</span>}
+              {status === "error"  && <span className="text-[10px]">✗</span>}
+              {status === "active" && isStreaming && <span className="spinner flex-none" style={{ width: 8, height: 8 }} />}
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 // ── Monitor Card (Right Panel) ────────────────────────────────────────────────
 
 function MonitorCard({ message, sessionName, harnesses }: {
@@ -807,19 +1239,13 @@ function MonitorCard({ message, sessionName, harnesses }: {
   const isStreaming = message.status === "streaming";
   const statusColor = message.status === "done" ? "#22c55e" : message.status === "error" ? "#ef4444" : "var(--accent)";
 
-  // 첨부된 하네스 찾기
   const attachedHarness = message.attachedItems?.find(a => a.kind === "harness");
   const harnessData = attachedHarness ? harnesses.find(h => h.id === attachedHarness.id) : null;
 
-  // 현재 실행 중인 도구 이름 (마지막 tool_call 기준)
-  const runningTools = new Set(
-    logs.filter(l => l.kind === "tool_call").map(l => (l as { kind: "tool_call"; tool: string; input: string }).tool)
-  );
-  const completedTools = new Set(
-    logs.filter(l => l.kind === "tool_result").map(l => (l as { kind: "tool_result"; tool: string; success: boolean; preview: string }).tool)
-  );
-  const lastToolCall = [...logs].reverse().find(l => l.kind === "tool_call") as { kind: "tool_call"; tool: string } | undefined;
-  const lastTool = lastToolCall?.tool;
+  const toolCallCount = logs.filter(l => l.kind === "tool_call").length;
+  const lastToolCall = [...logs].reverse().find(l => l.kind === "tool_call") as Extract<LogEntry, { kind: "tool_call" }> | undefined;
+
+  const stepStates = useHarnessStepStates(harnessData?.nodes ?? [], logs, isStreaming);
 
   return (
     <div className="rounded-lg overflow-hidden" style={{ border: "1px solid var(--border)", background: "var(--content-bg)" }}>
@@ -836,7 +1262,7 @@ function MonitorCard({ message, sessionName, harnesses }: {
             {attachedHarness?.name ?? sessionName}
           </div>
           <div className="text-[10px]" style={{ color: "var(--text-tertiary)" }}>
-            {sessionName} · 도구 {runningTools.size}회
+            {sessionName} · 도구 {toolCallCount}회
           </div>
         </div>
         {isStreaming && (
@@ -845,43 +1271,13 @@ function MonitorCard({ message, sessionName, harnesses }: {
         )}
       </div>
 
-      {/* Harness step graph */}
-      {harnessData && harnessData.steps.length > 0 && (
+      {/* Harness step flow graph */}
+      {harnessData && harnessData.nodes.length > 0 && (
         <div className="px-3 py-3" style={{ borderBottom: "1px solid var(--border)" }}>
           <div className="text-[10px] font-medium uppercase tracking-wider mb-2" style={{ color: "var(--text-tertiary)" }}>
             실행 흐름
           </div>
-          <div className="space-y-1.5">
-            {harnessData.steps.map((step, i) => {
-              const stepLabel = step.label ?? step.ref;
-              const isActive = isStreaming && lastTool && (stepLabel.includes(lastTool) || lastTool.includes(step.ref));
-              const isDone = completedTools.has(step.ref) || completedTools.has(stepLabel);
-              const kindIcon = step.kind === "subagent" ? "🤖" : step.kind === "tool" ? "⚙" : "📦";
-              const nodeColor = isDone ? "#22c55e" : isActive ? "var(--accent)" : "var(--text-tertiary)";
-              const nodeBg = isDone ? "#f0fdf4" : isActive ? "var(--accent-light)" : "var(--sidebar-bg)";
-              const nodeBorder = isDone ? "#86efac" : isActive ? "var(--accent)" : "var(--border)";
-
-              return (
-                <div key={step.id} className="flex items-center gap-2">
-                  {/* Connector line */}
-                  {i > 0 && (
-                    <div className="flex flex-col items-center" style={{ marginLeft: 10, marginRight: 2 }}>
-                      <div style={{ width: 1, height: 8, background: "var(--border)", marginBottom: 2 }} />
-                    </div>
-                  )}
-                  <div className={`flex items-center gap-2 px-2.5 py-1.5 rounded-lg w-full ${isActive ? "animate-pulse" : ""}`}
-                    style={{ background: nodeBg, border: `1px solid ${nodeBorder}` }}>
-                    <span className="text-[12px]">{kindIcon}</span>
-                    <span className="flex-1 text-[11.5px] font-medium truncate" style={{ color: nodeColor }}>
-                      {stepLabel}
-                    </span>
-                    {isDone && <span className="text-[10px]" style={{ color: "#22c55e" }}>✓</span>}
-                    {isActive && <span className="spinner flex-none" style={{ width: 8, height: 8 }} />}
-                  </div>
-                </div>
-              );
-            })}
-          </div>
+          <HarnessStepGraph steps={harnessData.nodes} states={stepStates} isStreaming={isStreaming} />
         </div>
       )}
 
@@ -891,7 +1287,7 @@ function MonitorCard({ message, sessionName, harnesses }: {
           {logs.slice(-6).map((entry, i) => <MiniLogLine key={i} entry={entry} />)}
           {isStreaming && (
             <div className="px-3 py-1 text-[11px] font-mono" style={{ color: "var(--text-tertiary)" }}>
-              {lastTool ? `→ ${lastTool}` : "분석 중..."}
+              {lastToolCall ? `→ ${lastToolCall.tool}` : "분석 중..."}
             </div>
           )}
         </div>
@@ -1420,6 +1816,7 @@ function HarnessesTab({ harnesses, registry, model, onSaved, onNavigate, onRunIn
   const [builtReport, setBuiltReport] = useState<string | null>(null);
   const [buildMeta, setBuildMeta] = useState<{ toolCallCount: number; iterations: number; elapsedMs: number } | null>(null);
   const [showLog, setShowLog] = useState(true);
+  const [selectedHarness, setSelectedHarness] = useState<RealHarness | null>(null);
 
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const logEndRef = useRef<HTMLDivElement>(null);
@@ -1428,6 +1825,7 @@ function HarnessesTab({ harnesses, registry, model, onSaved, onNavigate, onRunIn
   useEffect(() => { logEndRef.current?.scrollIntoView({ behavior: "smooth" }); }, [buildLog]);
 
   const handleRunHarness = (h: RealHarness) => {
+    setSelectedHarness(null);
     onRunInSession(h);
   };
 
@@ -1482,6 +1880,14 @@ function HarnessesTab({ harnesses, registry, model, onSaved, onNavigate, onRunIn
   ];
 
   return (
+    <>
+    {selectedHarness && (
+      <HarnessDetailModal
+        harness={selectedHarness}
+        onClose={() => setSelectedHarness(null)}
+        onRun={handleRunHarness}
+      />
+    )}
     <div className="flex-1 flex flex-col overflow-hidden">
       <div className="flex-none flex items-center gap-1 px-8 pt-5 pb-0">
         {(["list", "build"] as const).map(m => (
@@ -1502,27 +1908,42 @@ function HarnessesTab({ harnesses, registry, model, onSaved, onNavigate, onRunIn
                 <p>하네스가 없습니다. 빌드 탭에서 만들어보세요.</p>
               </div>
             ) : harnesses.map(h => (
-              <div key={h.id} className="rounded-xl px-5 py-4 flex items-start gap-4"
-                style={{ border: "1px solid var(--border)", background: "var(--sidebar-bg)" }}>
-                <div className="text-xl mt-0.5">{h.schedule.type === "cron" ? "⏰" : "▷"}</div>
-                <div className="flex-1 min-w-0">
-                  <div className="text-[14px] font-medium" style={{ color: "var(--text-primary)" }}>{h.name}</div>
-                  {h.description && <div className="text-[12px] mt-0.5" style={{ color: "var(--text-secondary)" }}>{h.description}</div>}
-                  <div className="text-[11px] mt-2" style={{ color: "var(--text-tertiary)" }}>
-                    {h.schedule.type === "cron" ? `크론: ${h.schedule.cron}` : "즉시 실행"} · {h.steps.length}단계
+              <div key={h.id} className="rounded-xl px-5 py-4 cursor-pointer transition-all"
+                style={{ border: "1px solid var(--border)", background: "var(--sidebar-bg)" }}
+                onClick={() => setSelectedHarness(h)}>
+                {/* Header row */}
+                <div className="flex items-start gap-4">
+                  <div className="text-xl mt-0.5">{h.schedule.type === "cron" ? "⏰" : "▷"}</div>
+                  <div className="flex-1 min-w-0">
+                    <div className="text-[14px] font-medium" style={{ color: "var(--text-primary)" }}>{h.name}</div>
+                    {h.description && <div className="text-[12px] mt-0.5" style={{ color: "var(--text-secondary)" }}>{h.description}</div>}
+                    <div className="text-[11px] mt-1" style={{ color: "var(--text-tertiary)" }}>
+                      {h.schedule.type === "cron" ? `크론: ${h.schedule.cron}` : "즉시 실행"}
+                    </div>
+                  </div>
+                  <div className="flex flex-col items-end gap-2 flex-none">
+                    <div className="text-[11px]" style={{ color: "var(--text-tertiary)" }}>
+                      {new Date(h.createdAt).toLocaleDateString("ko-KR")}
+                    </div>
+                    <button
+                      onClick={e => { e.stopPropagation(); handleRunHarness(h); }}
+                      className="px-3 py-1 rounded-lg text-[12px] font-medium"
+                      style={{ background: "var(--accent)", color: "white" }}>
+                      ▶ 실행
+                    </button>
                   </div>
                 </div>
-                <div className="flex flex-col items-end gap-2">
-                  <div className="text-[11px]" style={{ color: "var(--text-tertiary)" }}>
-                    {new Date(h.createdAt).toLocaleDateString("ko-KR")}
+                {/* Mini flow preview */}
+                {h.nodes.length > 0 && (
+                  <div className="mt-3 pt-3" style={{ borderTop: "1px solid var(--border)" }}>
+                    <HarnessStepGraph
+                      steps={h.nodes}
+                      states={h.nodes.map(step => ({ step, status: "pending" as StepStatus }))}
+                      isStreaming={false}
+                      layout="horizontal"
+                    />
                   </div>
-                  <button
-                    onClick={() => handleRunHarness(h)}
-                    className="px-3 py-1 rounded-lg text-[12px] font-medium"
-                    style={{ background: "var(--accent)", color: "white" }}>
-                    ▶ 실행
-                  </button>
-                </div>
+                )}
               </div>
             ))}
           </div>
@@ -1622,6 +2043,7 @@ function HarnessesTab({ harnesses, registry, model, onSaved, onNavigate, onRunIn
         </>
       )}
     </div>
+    </>
   );
 }
 

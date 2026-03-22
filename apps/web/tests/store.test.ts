@@ -19,7 +19,7 @@ describe('Harness store', () => {
     const h = saveHarness({
       name: 'Test Harness',
       description: '테스트용',
-      steps: [],
+      nodes: [], edges: [],
       schedule: { type: 'once' },
     });
     expect(h.id).toMatch(/^h_/);
@@ -28,26 +28,31 @@ describe('Harness store', () => {
     expect(getHarness(h.id)).toMatchObject({ name: 'Test Harness' });
   });
 
-  it('saves harness with steps', () => {
+  it('saves harness with nodes', () => {
     const h = saveHarness({
       name: '단계 하네스',
       description: '단계 포함',
-      steps: [
+      nodes: [
         { id: 's1', kind: 'tool', ref: 'execute_query', label: 'SQL 실행' },
         { id: 's2', kind: 'subagent', ref: 'sa_001', label: '분석 에이전트' },
       ],
+      edges: [
+        { id: 'e0', from: '__start__', to: 's1' },
+        { id: 'e1', from: 's1', to: 's2' },
+        { id: 'e2', from: 's2', to: '__end__' },
+      ],
       schedule: { type: 'once' },
     });
-    expect(h.steps).toHaveLength(2);
-    expect(h.steps[0].kind).toBe('tool');
-    expect(h.steps[1].kind).toBe('subagent');
+    expect(h.nodes).toHaveLength(2);
+    expect(h.nodes[0].kind).toBe('tool');
+    expect(h.nodes[1].kind).toBe('subagent');
   });
 
   it('saves harness with cron schedule', () => {
     const h = saveHarness({
       name: '일일 리포트',
       description: '매일 실행',
-      steps: [],
+      nodes: [], edges: [],
       schedule: { type: 'cron', cron: '0 9 * * *' },
     });
     expect(h.schedule.type).toBe('cron');
@@ -57,7 +62,7 @@ describe('Harness store', () => {
   });
 
   it('updates a harness', () => {
-    const h = saveHarness({ name: '원본', description: '', steps: [], schedule: { type: 'once' } });
+    const h = saveHarness({ name: '원본', description: '', nodes: [], edges: [], schedule: { type: 'once' } });
     const updated = updateHarness(h.id, { name: '수정됨', description: '업데이트됨' });
     expect(updated?.name).toBe('수정됨');
     expect(updated?.description).toBe('업데이트됨');
@@ -69,7 +74,7 @@ describe('Harness store', () => {
   });
 
   it('deletes a harness', () => {
-    const h = saveHarness({ name: '삭제 대상', description: '', steps: [], schedule: { type: 'once' } });
+    const h = saveHarness({ name: '삭제 대상', description: '', nodes: [], edges: [], schedule: { type: 'once' } });
     expect(deleteHarness(h.id)).toBe(true);
     expect(listHarnesses()).toHaveLength(0);
     expect(getHarness(h.id)).toBeUndefined();
@@ -80,16 +85,16 @@ describe('Harness store', () => {
   });
 
   it('maintains multiple harnesses independently', () => {
-    saveHarness({ name: 'A', description: '', steps: [], schedule: { type: 'once' } });
-    saveHarness({ name: 'B', description: '', steps: [], schedule: { type: 'once' } });
-    saveHarness({ name: 'C', description: '', steps: [], schedule: { type: 'once' } });
+    saveHarness({ name: 'A', description: '', nodes: [], edges: [], schedule: { type: 'once' } });
+    saveHarness({ name: 'B', description: '', nodes: [], edges: [], schedule: { type: 'once' } });
+    saveHarness({ name: 'C', description: '', nodes: [], edges: [], schedule: { type: 'once' } });
     const all = listHarnesses();
     expect(all).toHaveLength(3);
     expect(all.map(h => h.name)).toEqual(['A', 'B', 'C']);
   });
 
   it('persists createdAt and updatedAt', () => {
-    const h = saveHarness({ name: '타임스탬프', description: '', steps: [], schedule: { type: 'once' } });
+    const h = saveHarness({ name: '타임스탬프', description: '', nodes: [], edges: [], schedule: { type: 'once' } });
     expect(h.createdAt).toBeTruthy();
     expect(h.updatedAt).toBeTruthy();
     expect(new Date(h.createdAt).getTime()).toBeLessThanOrEqual(Date.now());
@@ -174,7 +179,7 @@ describe('SubAgent store', () => {
 
 describe('Run store', () => {
   it('creates a run with pending status', () => {
-    const h = saveHarness({ name: '런 테스트', description: '', steps: [], schedule: { type: 'once' } });
+    const h = saveHarness({ name: '런 테스트', description: '', nodes: [], edges: [], schedule: { type: 'once' } });
     const run = createRun(h.id);
     expect(run.id).toMatch(/^run_/);
     expect(run.harnessId).toBe(h.id);
@@ -183,14 +188,14 @@ describe('Run store', () => {
   });
 
   it('updates run status to running', () => {
-    const h = saveHarness({ name: '런 상태', description: '', steps: [], schedule: { type: 'once' } });
+    const h = saveHarness({ name: '런 상태', description: '', nodes: [], edges: [], schedule: { type: 'once' } });
     const run = createRun(h.id);
     const updated = updateRun(run.id, { status: 'running' });
     expect(updated?.status).toBe('running');
   });
 
   it('completes a run with report', () => {
-    const h = saveHarness({ name: '완료 런', description: '', steps: [], schedule: { type: 'once' } });
+    const h = saveHarness({ name: '완료 런', description: '', nodes: [], edges: [], schedule: { type: 'once' } });
     const run = createRun(h.id);
     const now = new Date().toISOString();
     const completed = updateRun(run.id, {
@@ -206,7 +211,7 @@ describe('Run store', () => {
   });
 
   it('marks run as failed with error', () => {
-    const h = saveHarness({ name: '실패 런', description: '', steps: [], schedule: { type: 'once' } });
+    const h = saveHarness({ name: '실패 런', description: '', nodes: [], edges: [], schedule: { type: 'once' } });
     const run = createRun(h.id);
     const failed = updateRun(run.id, { status: 'failed', error: '소스 연결 실패' });
     expect(failed?.status).toBe('failed');
@@ -214,8 +219,8 @@ describe('Run store', () => {
   });
 
   it('filters runs by harness id', () => {
-    const h1 = saveHarness({ name: 'H1', description: '', steps: [], schedule: { type: 'once' } });
-    const h2 = saveHarness({ name: 'H2', description: '', steps: [], schedule: { type: 'once' } });
+    const h1 = saveHarness({ name: 'H1', description: '', nodes: [], edges: [], schedule: { type: 'once' } });
+    const h2 = saveHarness({ name: 'H2', description: '', nodes: [], edges: [], schedule: { type: 'once' } });
     createRun(h1.id);
     createRun(h1.id);
     createRun(h2.id);
@@ -225,7 +230,7 @@ describe('Run store', () => {
   });
 
   it('retrieves run by id', () => {
-    const h = saveHarness({ name: '조회 테스트', description: '', steps: [], schedule: { type: 'once' } });
+    const h = saveHarness({ name: '조회 테스트', description: '', nodes: [], edges: [], schedule: { type: 'once' } });
     const run = createRun(h.id);
     expect(getRun(run.id)).toMatchObject({ id: run.id });
     expect(getRun('run_nonexistent')).toBeUndefined();
@@ -236,27 +241,27 @@ describe('Run store', () => {
   });
 
   it('run id format starts with run_', () => {
-    const h = saveHarness({ name: 'ID 포맷', description: '', steps: [], schedule: { type: 'once' } });
+    const h = saveHarness({ name: 'ID 포맷', description: '', nodes: [], edges: [], schedule: { type: 'once' } });
     const run = createRun(h.id);
     expect(run.id).toMatch(/^run_/);
   });
 
   it('listRuns with no filter returns all runs across harnesses', () => {
-    const h1 = saveHarness({ name: 'H1', description: '', steps: [], schedule: { type: 'once' } });
-    const h2 = saveHarness({ name: 'H2', description: '', steps: [], schedule: { type: 'once' } });
+    const h1 = saveHarness({ name: 'H1', description: '', nodes: [], edges: [], schedule: { type: 'once' } });
+    const h2 = saveHarness({ name: 'H2', description: '', nodes: [], edges: [], schedule: { type: 'once' } });
     createRun(h1.id);
     createRun(h2.id);
     expect(listRuns()).toHaveLength(2);
   });
 
   it('run has startedAt timestamp in ISO format', () => {
-    const h = saveHarness({ name: '타임스탬프 런', description: '', steps: [], schedule: { type: 'once' } });
+    const h = saveHarness({ name: '타임스탬프 런', description: '', nodes: [], edges: [], schedule: { type: 'once' } });
     const run = createRun(h.id);
     expect(run.startedAt).toMatch(/^\d{4}-\d{2}-\d{2}T/);
   });
 
   it('run durationMs is set after update', () => {
-    const h = saveHarness({ name: '소요시간 테스트', description: '', steps: [], schedule: { type: 'once' } });
+    const h = saveHarness({ name: '소요시간 테스트', description: '', nodes: [], edges: [], schedule: { type: 'once' } });
     const run = createRun(h.id);
     const updated = updateRun(run.id, { status: 'completed', durationMs: 4200, completedAt: new Date().toISOString() });
     expect(updated?.durationMs).toBe(4200);
