@@ -62,6 +62,7 @@ export default function Home() {
   const [sessionMessages, setSessionMessages] = useState<Record<string, ChatMessage[]>>({});
   const [navTab, setNavTab] = useState<NavTab>("chat");
   const [rightOpen, setRightOpen] = useState(false);
+  const [chatModel, setChatModel] = useState("claude-sonnet-4-6");
   // aggregated running tool/log state for right panel (across all sessions)
   const [runningLogs, setRunningLogs] = useState<{ sessionId: string; msgId: string; logs: LogEntry[] }[]>([]);
 
@@ -126,7 +127,7 @@ export default function Home() {
     if (activeSessionId === id) setActiveSessionId(sessions.find(s => s.id !== id)?.id ?? null);
   };
 
-  const streamQuery = async (sessionId: string, userText: string, attachedItems?: PaletteItem[]) => {
+  const streamQuery = async (sessionId: string, userText: string, attachedItems?: PaletteItem[], model?: string) => {
     const userMsgId = `msg_${Date.now()}`;
     const asstMsgId = `msg_${Date.now() + 1}`;
     const userMsg: ChatMessage = { id: userMsgId, role: "user", content: userText, attachedItems, createdAt: new Date().toISOString() };
@@ -149,7 +150,7 @@ export default function Home() {
     try {
       const res = await fetch("/api/analyze", {
         method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ query: userText }),
+        body: JSON.stringify({ query: userText, model: model ?? chatModel }),
       });
       if (!res.ok) {
         const errBody = await res.json().catch(() => ({ error: `서버 오류 (${res.status})` }));
@@ -287,6 +288,8 @@ export default function Home() {
                   messages={activeMessages}
                   harnesses={harnesses}
                   registry={registry}
+                  model={chatModel}
+                  onModelChange={setChatModel}
                   onSend={(text, items) => streamQuery(activeSessionId, text, items)}
                 />
               : <NoChatState onCreateSession={createSession} />
@@ -384,11 +387,22 @@ function SessionItem({ session, active, isStreaming, preview, onClick, onDelete 
 
 // ── Chat View ─────────────────────────────────────────────────────────────────
 
-function ChatView({ sessionId, messages, harnesses, registry, onSend }: {
+const CHAT_MODELS = [
+  { id: "claude-opus-4-6",        label: "Opus 4.6",       provider: "Anthropic" },
+  { id: "claude-sonnet-4-6",      label: "Sonnet 4.6",     provider: "Anthropic" },
+  { id: "claude-haiku-4-5-20251001", label: "Haiku 4.5",   provider: "Anthropic" },
+  { id: "gpt-4o",                 label: "GPT-4o",          provider: "OpenAI" },
+  { id: "gpt-4o-mini",            label: "GPT-4o mini",     provider: "OpenAI" },
+  { id: "o3-mini",                label: "o3-mini",         provider: "OpenAI" },
+];
+
+function ChatView({ sessionId, messages, harnesses, registry, model, onModelChange, onSend }: {
   sessionId: string;
   messages: ChatMessage[];
   harnesses: RealHarness[];
   registry: Registry;
+  model: string;
+  onModelChange: (m: string) => void;
   onSend: (text: string, attachedItems?: PaletteItem[]) => void;
 }) {
   const [input, setInput] = useState("");
@@ -624,14 +638,24 @@ function ChatView({ sessionId, messages, harnesses, registry, onSend }: {
               className="w-full resize-none px-4 pt-3 pb-2 outline-none text-[13.5px] leading-relaxed"
               style={{ background: "transparent", color: "var(--text-primary)", fontFamily: "inherit" }}
             />
-            <div className="flex items-center justify-between px-3 pb-2 pt-1"
+            <div className="flex items-center justify-between px-3 pb-2 pt-1 gap-2"
               style={{ borderTop: "1px solid var(--border)", background: "#fafaf9" }}>
-              <span className="text-[11px]" style={{ color: "var(--text-tertiary)" }}>
+              <span className="text-[11px] flex-none" style={{ color: "var(--text-tertiary)" }}>
                 <kbd className="px-1 rounded text-[10px]" style={{ border: "1px solid var(--border)" }}>/</kbd> 명령어 &nbsp;
                 <kbd className="px-1 rounded text-[10px]" style={{ border: "1px solid var(--border)" }}>Enter</kbd> 전송
               </span>
+              <select
+                value={model}
+                onChange={e => onModelChange(e.target.value)}
+                disabled={isStreaming}
+                className="text-[11.5px] px-2 py-1 rounded-lg outline-none"
+                style={{ border: "1px solid var(--border)", background: "white", color: "var(--text-secondary)", maxWidth: 160 }}>
+                {CHAT_MODELS.map(m => (
+                  <option key={m.id} value={m.id}>{m.provider} · {m.label}</option>
+                ))}
+              </select>
               <button onClick={send} disabled={!input.trim() || isStreaming}
-                className="px-4 py-1.5 rounded-lg text-[12.5px] font-medium flex items-center gap-1.5"
+                className="flex-none px-4 py-1.5 rounded-lg text-[12.5px] font-medium flex items-center gap-1.5"
                 style={{
                   background: input.trim() && !isStreaming ? "var(--accent)" : "var(--border)",
                   color: input.trim() && !isStreaming ? "white" : "var(--text-tertiary)",

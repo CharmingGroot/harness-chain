@@ -7,15 +7,21 @@ export const dynamic = 'force-dynamic';
 export const maxDuration = 300; // 5분
 
 export async function POST(req: NextRequest) {
-  const { query } = await req.json() as { query: string };
+  const { query, model } = await req.json() as { query: string; model?: string };
 
   if (!query?.trim()) {
     return new Response(JSON.stringify({ error: 'query is required' }), { status: 400 });
   }
 
-  const apiKey = process.env.ANTHROPIC_API_KEY;
+  const selectedModel = model ?? 'claude-sonnet-4-6';
+  const isOpenAI = selectedModel.startsWith('gpt-') || selectedModel.startsWith('o1') || selectedModel.startsWith('o3');
+  const apiKey = isOpenAI
+    ? process.env.OPENAI_API_KEY
+    : process.env.ANTHROPIC_API_KEY;
+
   if (!apiKey) {
-    return new Response(JSON.stringify({ error: 'ANTHROPIC_API_KEY not configured' }), { status: 500 });
+    const keyName = isOpenAI ? 'OPENAI_API_KEY' : 'ANTHROPIC_API_KEY';
+    return new Response(JSON.stringify({ error: `${keyName} not configured` }), { status: 500 });
   }
 
   const encoder = new TextEncoder();
@@ -31,6 +37,7 @@ export async function POST(req: NextRequest) {
       try {
         const orchestrator = new Orchestrator({
           apiKey,
+          model: selectedModel,
           sources: [source],
           maxIterations: 25,
           onEvent: send,
