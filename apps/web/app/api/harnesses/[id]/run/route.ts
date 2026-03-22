@@ -4,11 +4,11 @@ import { executeHarness } from '@/lib/executor';
 export async function POST(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
   const body = await req.json().catch(() => ({}));
-  const { prompt } = body as { prompt?: string };
+  const { prompt, model } = body as { prompt?: string; model?: string };
 
   try {
     // Fire and forget — return run metadata immediately, execution continues in background
-    const runPromise = executeHarness(id, prompt);
+    const runPromise = executeHarness(id, prompt, model);
 
     // Return the initial run record (status=running)
     const run = await Promise.race([

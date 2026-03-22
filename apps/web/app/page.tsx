@@ -62,7 +62,7 @@ export default function Home() {
   const [sessionMessages, setSessionMessages] = useState<Record<string, ChatMessage[]>>({});
   const [navTab, setNavTab] = useState<NavTab>("chat");
   const [rightOpen, setRightOpen] = useState(false);
-  const [chatModel, setChatModel] = useState("gpt-5.2-mini");
+  const [globalModel, setGlobalModel] = useState("gpt-5.4-mini");
   // aggregated running tool/log state for right panel (across all sessions)
   const [runningLogs, setRunningLogs] = useState<{ sessionId: string; msgId: string; logs: LogEntry[] }[]>([]);
 
@@ -150,7 +150,7 @@ export default function Home() {
     try {
       const res = await fetch("/api/analyze", {
         method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ query: userText, model: model ?? chatModel }),
+        body: JSON.stringify({ query: userText, model: model ?? globalModel }),
       });
       if (!res.ok) {
         const errBody = await res.json().catch(() => ({ error: `서버 오류 (${res.status})` }));
@@ -224,6 +224,15 @@ export default function Home() {
           })}
         </div>
         <div className="ml-auto flex items-center gap-2">
+          <select
+            value={globalModel}
+            onChange={e => setGlobalModel(e.target.value)}
+            className="text-[12px] px-2 py-1 rounded outline-none"
+            style={{ border: "1px solid var(--border)", background: "var(--sidebar-bg)", color: "var(--text-primary)", maxWidth: 160 }}>
+            {CHAT_MODELS.map(m => (
+              <option key={m.id} value={m.id}>{m.label}</option>
+            ))}
+          </select>
           <button onClick={() => setRightOpen(o => !o)}
             className="px-2.5 py-1 rounded text-[12px] flex items-center gap-1"
             style={{ border: "1px solid var(--border)", color: streamingCount > 0 ? "var(--accent)" : "var(--text-tertiary)", background: rightOpen ? "var(--active-bg)" : "transparent" }}>
@@ -288,8 +297,8 @@ export default function Home() {
                   messages={activeMessages}
                   harnesses={harnesses}
                   registry={registry}
-                  model={chatModel}
-                  onModelChange={setChatModel}
+                  model={globalModel}
+                  onModelChange={setGlobalModel}
                   onSend={(text, items) => streamQuery(activeSessionId, text, items)}
                 />
               : <NoChatState onCreateSession={createSession} />
@@ -301,7 +310,9 @@ export default function Home() {
             <HarnessesTab
               harnesses={harnesses}
               registry={registry}
+              model={globalModel}
               onSaved={async () => { await refreshAll(); setNavTab("chat"); }}
+              onNavigate={setNavTab}
             />
           )}
           {navTab === "observability" && <ObservabilityTab />}
@@ -399,9 +410,10 @@ const CHAT_MODELS = [
   { id: "claude-3-sonnet-20240229",     label: "Claude 3 Sonnet",       provider: "Anthropic" },
   { id: "claude-3-haiku-20240307",      label: "Claude 3 Haiku",        provider: "Anthropic" },
   // OpenAI
-  { id: "gpt-5.2-mini",                 label: "GPT-5.2 mini",           provider: "OpenAI" },
+  { id: "gpt-5.4-mini",                 label: "GPT-5.4 mini",           provider: "OpenAI" },
+  { id: "gpt-4.1-mini",                 label: "GPT-4.1 mini",           provider: "OpenAI" },
   { id: "gpt-4o",                       label: "GPT-4o",                 provider: "OpenAI" },
-  { id: "gpt-4o-mini",                  label: "GPT-4o mini",            provider: "OpenAI" },
+  { id: "gpt-4o-mini",                   label: "GPT-4o mini",            provider: "OpenAI" },
   { id: "gpt-4-turbo",                  label: "GPT-4 Turbo",            provider: "OpenAI" },
   { id: "o3-mini",                      label: "o3-mini",                provider: "OpenAI" },
   { id: "o1",                           label: "o1",                     provider: "OpenAI" },
@@ -888,45 +900,91 @@ function MiniLogLine({ entry }: { entry: LogEntry }) {
 
 // ── Sources Tab ───────────────────────────────────────────────────────────────
 
+const SOURCE_TYPES = [
+  { id: "postgresql", icon: "🐘", name: "PostgreSQL", desc: "pg 호환 데이터베이스" },
+  { id: "notion",     icon: "📓", name: "Notion",     desc: "페이지 / 데이터베이스 읽기" },
+  { id: "gdrive",     icon: "📁", name: "Google Drive", desc: "문서 / 스프레드시트 읽기" },
+  { id: "redis",      icon: "🔴", name: "Redis",      desc: "캐시 / 큐", soon: true },
+  { id: "csv",        icon: "📄", name: "CSV / Excel", desc: "파일 업로드", soon: true },
+  { id: "rest",       icon: "🌐", name: "REST API",   desc: "외부 HTTP 엔드포인트", soon: true },
+] as const;
+
 function SourcesTab() {
+  const [selected, setSelected] = useState<string>("postgresql");
+
   return (
     <div className="flex-1 overflow-y-auto px-10 py-8">
       <div className="max-w-xl">
         <h1 className="text-[20px] font-semibold mb-1" style={{ color: "var(--text-primary)" }}>소스 관리</h1>
         <p className="text-[13px] mb-6" style={{ color: "var(--text-secondary)" }}>에이전트가 데이터를 읽어올 소스를 등록합니다</p>
-        <div className="grid grid-cols-2 gap-3 mb-6">
-          {[
-            { icon: "🐘", name: "PostgreSQL", desc: "pg 호환 데이터베이스" },
-            { icon: "🔴", name: "Redis", desc: "캐시 / 큐", soon: true },
-            { icon: "📄", name: "CSV / Excel", desc: "파일 업로드", soon: true },
-            { icon: "🌐", name: "REST API", desc: "외부 HTTP 엔드포인트", soon: true },
-          ].map(s => (
-            <button key={s.name} disabled={s.soon}
-              className="text-left rounded-xl p-4 flex flex-col gap-2"
-              style={{ border: "1px solid var(--border)", background: s.soon ? "var(--sidebar-bg)" : "white", opacity: s.soon ? 0.5 : 1 }}>
+        <div className="grid grid-cols-3 gap-3 mb-6">
+          {SOURCE_TYPES.map(s => (
+            <button key={s.id} disabled={"soon" in s && s.soon}
+              onClick={() => !("soon" in s && s.soon) && setSelected(s.id)}
+              className="text-left rounded-xl p-4 flex flex-col gap-2 transition-all"
+              style={{
+                border: `1px solid ${selected === s.id ? "var(--accent)" : "var(--border)"}`,
+                background: selected === s.id ? "var(--accent-light)" : ("soon" in s && s.soon) ? "var(--sidebar-bg)" : "white",
+                opacity: ("soon" in s && s.soon) ? 0.5 : 1,
+              }}>
               <span className="text-2xl">{s.icon}</span>
               <div>
                 <div className="text-[13px] font-medium" style={{ color: "var(--text-primary)" }}>{s.name}</div>
                 <div className="text-[11.5px]" style={{ color: "var(--text-secondary)" }}>{s.desc}</div>
               </div>
-              {s.soon && <span className="text-[10px] px-1.5 py-0.5 rounded self-start" style={{ background: "var(--border)", color: "var(--text-tertiary)" }}>준비 중</span>}
+              {"soon" in s && s.soon && <span className="text-[10px] px-1.5 py-0.5 rounded self-start" style={{ background: "var(--border)", color: "var(--text-tertiary)" }}>준비 중</span>}
             </button>
           ))}
         </div>
-        <div className="rounded-xl p-4" style={{ border: "1px solid var(--border)" }}>
-          <div className="text-[12px] font-medium mb-3" style={{ color: "var(--text-primary)" }}>PostgreSQL 연결</div>
-          {["Host", "Port", "Database", "Username", "Password"].map(f => (
-            <div key={f} className="mb-2">
-              <label className="text-[11px] block mb-1" style={{ color: "var(--text-tertiary)" }}>{f}</label>
-              <input type={f === "Password" ? "password" : "text"} placeholder={f === "Port" ? "5432" : ""}
-                className="w-full px-3 py-1.5 rounded-lg text-[13px] outline-none"
-                style={{ border: "1px solid var(--border)", background: "white", color: "var(--text-primary)" }} />
-            </div>
-          ))}
-          <button className="mt-3 w-full py-2 rounded-lg text-[13px] font-medium" style={{ background: "var(--accent)", color: "white" }}>
-            연결 테스트 후 저장
-          </button>
-        </div>
+
+        {selected === "postgresql" && (
+          <div className="rounded-xl p-4" style={{ border: "1px solid var(--border)" }}>
+            <div className="text-[12px] font-medium mb-3" style={{ color: "var(--text-primary)" }}>PostgreSQL 연결</div>
+            {["Host", "Port", "Database", "Username", "Password"].map(f => (
+              <div key={f} className="mb-2">
+                <label className="text-[11px] block mb-1" style={{ color: "var(--text-tertiary)" }}>{f}</label>
+                <input type={f === "Password" ? "password" : "text"} placeholder={f === "Port" ? "5432" : ""}
+                  className="w-full px-3 py-1.5 rounded-lg text-[13px] outline-none"
+                  style={{ border: "1px solid var(--border)", background: "white", color: "var(--text-primary)" }} />
+              </div>
+            ))}
+            <button className="mt-3 w-full py-2 rounded-lg text-[13px] font-medium" style={{ background: "var(--accent)", color: "white" }}>
+              연결 테스트 후 저장
+            </button>
+          </div>
+        )}
+
+        {selected === "notion" && (
+          <div className="rounded-xl p-5" style={{ border: "1px solid var(--border)" }}>
+            <div className="text-[13px] font-semibold mb-1" style={{ color: "var(--text-primary)" }}>Notion 연결</div>
+            <p className="text-[12px] mb-5 leading-relaxed" style={{ color: "var(--text-secondary)" }}>
+              Notion 워크스페이스에 OAuth로 연결합니다. 연결하면 에이전트가 허용된 페이지와 데이터베이스를 읽고 쓸 수 있습니다.
+            </p>
+            <button className="w-full py-2.5 rounded-lg text-[13px] font-medium flex items-center justify-center gap-2"
+              style={{ background: "#000", color: "white" }}>
+              <span>📓</span> Notion으로 로그인
+            </button>
+            <p className="text-[11px] mt-3 text-center" style={{ color: "var(--text-tertiary)" }}>
+              연결 후 접근을 허용할 페이지/DB를 Notion에서 직접 지정합니다
+            </p>
+          </div>
+        )}
+
+        {selected === "gdrive" && (
+          <div className="rounded-xl p-5" style={{ border: "1px solid var(--border)" }}>
+            <div className="text-[13px] font-semibold mb-1" style={{ color: "var(--text-primary)" }}>Google Drive 연결</div>
+            <p className="text-[12px] mb-5 leading-relaxed" style={{ color: "var(--text-secondary)" }}>
+              Google 계정으로 OAuth 연결합니다. 에이전트가 Drive 파일과 Sheets 데이터를 읽고 쓸 수 있습니다.
+            </p>
+            <button className="w-full py-2.5 rounded-lg text-[13px] font-medium flex items-center justify-center gap-2"
+              style={{ background: "#4285F4", color: "white" }}>
+              <span>🔑</span> Google 계정으로 로그인
+            </button>
+            <p className="text-[11px] mt-3 text-center" style={{ color: "var(--text-tertiary)" }}>
+              Drive, Sheets 접근 권한을 요청합니다
+            </p>
+          </div>
+        )}
       </div>
     </div>
   );
@@ -934,32 +992,75 @@ function SourcesTab() {
 
 // ── Tools Tab ─────────────────────────────────────────────────────────────────
 
+const TOOL_GROUPS = [
+  {
+    group: "내장 (Built-in)",
+    tools: [
+      { icon: "🗄", name: "SQL 쿼리", desc: "execute_query, get_schema, explain_query 등", builtin: true },
+    ],
+  },
+  {
+    group: "Notion",
+    source: "Notion 소스 연결 필요",
+    tools: [
+      { icon: "📓", name: "Notion 페이지 읽기", desc: "페이지 본문 및 속성 조회", soon: true },
+      { icon: "🔍", name: "Notion DB 검색", desc: "데이터베이스 필터/정렬 조회", soon: true },
+      { icon: "✏️", name: "Notion 페이지 업데이트", desc: "페이지 속성 및 내용 수정", soon: true },
+      { icon: "📊", name: "Notion DB 레코드 추가", desc: "데이터베이스에 새 행 추가", soon: true },
+    ],
+  },
+  {
+    group: "Google",
+    source: "Google Drive 소스 연결 필요",
+    tools: [
+      { icon: "📁", name: "Drive 파일 읽기", desc: "Google Docs / PDF 본문 추출", soon: true },
+      { icon: "📋", name: "Sheets 데이터 읽기", desc: "스프레드시트 범위 조회", soon: true },
+      { icon: "📝", name: "Sheets 데이터 쓰기", desc: "셀 값 업데이트 / 행 추가", soon: true },
+    ],
+  },
+  {
+    group: "알림 / 연동",
+    tools: [
+      { icon: "📧", name: "이메일 발송", desc: "SMTP / SendGrid", soon: true },
+      { icon: "💬", name: "Slack 메시지", desc: "채널 / DM 발송", soon: true },
+      { icon: "🔔", name: "웹훅 호출", desc: "임의 HTTP POST", soon: true },
+    ],
+  },
+];
+
 function ToolsTab() {
   return (
     <div className="flex-1 overflow-y-auto px-10 py-8">
-      <div className="max-w-xl">
+      <div className="max-w-2xl">
         <h1 className="text-[20px] font-semibold mb-1" style={{ color: "var(--text-primary)" }}>도구 관리</h1>
         <p className="text-[13px] mb-6" style={{ color: "var(--text-secondary)" }}>에이전트가 사용할 도구를 등록합니다</p>
-        <div className="grid grid-cols-2 gap-3">
-          {[
-            { icon: "🗄", name: "SQL 쿼리", desc: "execute_query, get_schema 등", builtin: true },
-            { icon: "📧", name: "이메일 발송", desc: "SMTP / SendGrid", soon: true },
-            { icon: "💬", name: "Slack 메시지", desc: "채널 / DM 발송", soon: true },
-            { icon: "📊", name: "Notion 업데이트", desc: "페이지 / DB 작성", soon: true },
-            { icon: "🔔", name: "웹훅 호출", desc: "임의 HTTP POST", soon: true },
-            { icon: "📁", name: "파일 저장", desc: "로컬 / S3", soon: true },
-          ].map(t => (
-            <div key={t.name} className="rounded-xl p-4 flex flex-col gap-2"
-              style={{ border: "1px solid var(--border)", background: "var(--sidebar-bg)", opacity: t.soon ? 0.55 : 1 }}>
-              <span className="text-2xl">{t.icon}</span>
-              <div>
-                <div className="flex items-center gap-1.5">
-                  <span className="text-[13px] font-medium" style={{ color: "var(--text-primary)" }}>{t.name}</span>
-                  {t.builtin && <span className="text-[10px] px-1 py-0.5 rounded" style={{ background: "var(--accent-light)", color: "var(--accent)" }}>내장</span>}
-                </div>
-                <div className="text-[11.5px]" style={{ color: "var(--text-secondary)" }}>{t.desc}</div>
+        <div className="flex flex-col gap-6">
+          {TOOL_GROUPS.map(g => (
+            <div key={g.group}>
+              <div className="flex items-center gap-2 mb-2">
+                <span className="text-[11px] font-semibold uppercase tracking-wide" style={{ color: "var(--text-tertiary)" }}>{g.group}</span>
+                {"source" in g && (
+                  <span className="text-[10px] px-1.5 py-0.5 rounded" style={{ background: "var(--border)", color: "var(--text-tertiary)" }}>
+                    {g.source}
+                  </span>
+                )}
               </div>
-              {t.soon && <span className="text-[10px] self-start px-1.5 py-0.5 rounded" style={{ background: "var(--border)", color: "var(--text-tertiary)" }}>준비 중</span>}
+              <div className="grid grid-cols-2 gap-3">
+                {g.tools.map(t => (
+                  <div key={t.name} className="rounded-xl p-4 flex flex-col gap-2"
+                    style={{ border: "1px solid var(--border)", background: "var(--sidebar-bg)", opacity: "soon" in t && t.soon ? 0.6 : 1 }}>
+                    <span className="text-xl">{t.icon}</span>
+                    <div>
+                      <div className="flex items-center gap-1.5">
+                        <span className="text-[13px] font-medium" style={{ color: "var(--text-primary)" }}>{t.name}</span>
+                        {"builtin" in t && t.builtin && <span className="text-[10px] px-1 py-0.5 rounded" style={{ background: "var(--accent-light)", color: "var(--accent)" }}>내장</span>}
+                      </div>
+                      <div className="text-[11.5px]" style={{ color: "var(--text-secondary)" }}>{t.desc}</div>
+                    </div>
+                    {"soon" in t && t.soon && <span className="text-[10px] self-start px-1.5 py-0.5 rounded" style={{ background: "var(--border)", color: "var(--text-tertiary)" }}>준비 중</span>}
+                  </div>
+                ))}
+              </div>
             </div>
           ))}
         </div>
@@ -990,7 +1091,7 @@ function SubAgentsTab({ subAgents, tools, onSaved }: { subAgents: SubAgent[]; to
   const [builtSkills, setBuiltSkills] = useState("");
   const [builtRules, setBuiltRules] = useState("");
   const [selectedTools, setSelectedTools] = useState<Set<string>>(new Set());
-  const [selectedModel, setSelectedModel] = useState("gpt-5.2-mini");
+  const [selectedModel, setSelectedModel] = useState("gpt-5.4-mini");
   const [saving, setSaving] = useState(false);
 
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -1003,7 +1104,10 @@ function SubAgentsTab({ subAgents, tools, onSaved }: { subAgents: SubAgent[]; to
     try {
       const res = await fetch("/api/subagents/build", {
         method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ description: processDesc }),
+        body: JSON.stringify({
+          description: processDesc,
+          availableTools: tools.filter(t => !t.comingSoon).map(t => ({ id: t.id, name: t.name, description: t.description })),
+        }),
       });
       if (!res.ok) {
         const errBody = await res.json().catch(() => ({ error: `서버 오류 (${res.status})` }));
@@ -1032,6 +1136,7 @@ function SubAgentsTab({ subAgents, tools, onSaved }: { subAgents: SubAgent[]; to
               setBuiltSystemPrompt(d.systemPrompt ?? "");
               setBuiltSkills(d.skills ?? "");
               setBuiltRules(d.rules ?? "");
+              if (Array.isArray(d.tools)) setSelectedTools(new Set(d.tools as string[]));
               setBuiltResult(true);
               setBuildLog([]);
             } else if (event.type === "error") {
@@ -1292,8 +1397,8 @@ function SubAgentsTab({ subAgents, tools, onSaved }: { subAgents: SubAgent[]; to
 
 // ── Harnesses Tab ─────────────────────────────────────────────────────────────
 
-function HarnessesTab({ harnesses, registry, onSaved }: {
-  harnesses: RealHarness[]; registry: Registry; onSaved: () => void;
+function HarnessesTab({ harnesses, registry, model, onSaved, onNavigate }: {
+  harnesses: RealHarness[]; registry: Registry; model: string; onSaved: () => void; onNavigate: (tab: NavTab) => void;
 }) {
   const [mode, setMode] = useState<"list" | "build">(harnesses.length === 0 ? "build" : "list");
   const [processDesc, setProcessDesc] = useState("");
@@ -1312,10 +1417,13 @@ function HarnessesTab({ harnesses, registry, onSaved }: {
   const handleRunHarness = async (harnessId: string) => {
     setRunningIds(prev => new Set(prev).add(harnessId));
     try {
-      await fetch(`/api/harnesses/${harnessId}/run`, { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" });
-    } finally {
+      await fetch(`/api/harnesses/${harnessId}/run`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ model }) });
+      // 실행 현황 탭으로 이동 (백그라운드 실행 중)
+      onNavigate("observability");
+    } catch {
       setRunningIds(prev => { const next = new Set(prev); next.delete(harnessId); return next; });
     }
+    // runningId는 탭 이동 후에도 유지 — 실행 현황에서 완료 시 자동 해제됨
   };
 
   const handleBuild = async () => {
@@ -1517,7 +1625,12 @@ function HarnessesTab({ harnesses, registry, onSaved }: {
 
 function ObservabilityTab() {
   const [queue, setQueue] = useState<{ jobs: unknown[]; metrics: { totalJobs: number; pending: number; running: number; completed: number; failed: number } } | null>(null);
-  useEffect(() => { fetch("/api/queue").then(r => r.json()).then(setQueue).catch(console.error); }, []);
+  const fetchQueue = useCallback(() => { fetch("/api/queue").then(r => r.json()).then(setQueue).catch(console.error); }, []);
+  useEffect(() => {
+    fetchQueue();
+    const iv = setInterval(fetchQueue, 3000); // 3초마다 폴링
+    return () => clearInterval(iv);
+  }, [fetchQueue]);
   type Job = { id: string; harnessName: string; trigger: string; startedAt: string; durationMs: number | null; status: string; error: string | null };
   const jobs = (queue?.jobs ?? []) as Job[];
   const metrics = queue?.metrics;
@@ -1556,10 +1669,14 @@ function ObservabilityTab() {
               completed: { color: "var(--text-tertiary)", label: "완료" }, failed: { color: "#ef4444", label: "실패" },
             };
             const s = statusMap[job.status] ?? statusMap.scheduled;
+            const isRunning = job.status === "running";
             return (
               <div key={job.id} className="grid px-4 py-3 text-[12.5px] items-center"
-                style={{ gridTemplateColumns: "2fr 1fr 1fr 1fr 1fr", borderTop: i > 0 ? "1px solid var(--border)" : "none" }}>
-                <div className="font-medium" style={{ color: "var(--text-primary)" }}>{job.harnessName}</div>
+                style={{ gridTemplateColumns: "2fr 1fr 1fr 1fr 1fr", borderTop: i > 0 ? "1px solid var(--border)" : "none", background: isRunning ? "var(--accent-light)" : "transparent" }}>
+                <div className="font-medium flex items-center gap-2" style={{ color: "var(--text-primary)" }}>
+                  {isRunning && <span className="spinner" style={{ width: 10, height: 10, flexShrink: 0 }} />}
+                  {job.harnessName}
+                </div>
                 <span style={{ color: "var(--text-secondary)" }}>{job.trigger}</span>
                 <span style={{ color: "var(--text-secondary)" }}>{job.startedAt ? new Date(job.startedAt).toLocaleTimeString("ko-KR", { hour: "2-digit", minute: "2-digit" }) : "-"}</span>
                 <span style={{ color: "var(--text-secondary)" }}>{job.durationMs != null ? `${(job.durationMs / 1000).toFixed(1)}s` : "-"}</span>

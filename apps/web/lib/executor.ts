@@ -15,13 +15,20 @@ import type { HarnessDef, HarnessRun } from './store';
 
 export async function executeHarness(
   harnessId: string,
-  prompt?: string
+  prompt?: string,
+  model?: string
 ): Promise<HarnessRun> {
   const harness = getHarness(harnessId);
   if (!harness) throw new Error(`Harness not found: ${harnessId}`);
 
-  const apiKey = process.env.ANTHROPIC_API_KEY;
-  if (!apiKey) throw new Error('ANTHROPIC_API_KEY not set');
+  // Pick the best available key + model
+  const anthropicKey = process.env.ANTHROPIC_API_KEY;
+  const openaiKey = process.env.OPENAI_API_KEY;
+  if (!anthropicKey && !openaiKey) throw new Error('API key not set (ANTHROPIC_API_KEY or OPENAI_API_KEY required)');
+
+  const resolvedModel = model ?? (anthropicKey ? 'claude-sonnet-4-6' : 'gpt-5.4-mini');
+  const isOpenAI = resolvedModel.startsWith('gpt-') || resolvedModel.startsWith('o1') || resolvedModel.startsWith('o3');
+  const apiKey = isOpenAI ? (openaiKey ?? anthropicKey!) : (anthropicKey ?? openaiKey!);
 
   const run = createRun(harnessId);
   const startedAt = Date.now();
@@ -36,6 +43,7 @@ export async function executeHarness(
   const orchestrator = new Orchestrator({
     apiKey,
     sources: [source],
+    model: resolvedModel,
     maxIterations: 30,
   });
 

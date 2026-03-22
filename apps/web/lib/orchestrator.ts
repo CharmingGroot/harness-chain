@@ -117,13 +117,13 @@ export class Orchestrator {
     let toolCallCount = 0;
 
     eventBus.on('tool:start', (data: unknown) => {
-      const { name, params } = data as { name: string; params: unknown };
+      const { toolCall } = data as { toolCall: { name: string; arguments: string } };
       toolCallCount++;
-      this.emit({ type: 'tool_call', tool: name, input: JSON.stringify(params).slice(0, 100) });
+      this.emit({ type: 'tool_call', tool: toolCall.name, input: (toolCall.arguments ?? '').slice(0, 100) });
     });
     eventBus.on('tool:end', (data: unknown) => {
-      const { name, result } = data as { name: string; result: { success: boolean; output: string } };
-      this.emit({ type: 'tool_result', tool: name, success: result.success, preview: result.output.slice(0, 120) });
+      const { toolCall, result } = data as { toolCall: { name: string }; result: { success: boolean; output: string } };
+      this.emit({ type: 'tool_result', tool: toolCall.name, success: result.success, preview: (result.output ?? '').slice(0, 120) });
     });
 
     const agentLoop = new AgentLoop({

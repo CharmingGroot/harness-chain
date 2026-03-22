@@ -17,15 +17,16 @@ export class HarnessToolAdapter implements CATool {
 
   describe(): ToolDescription {
     const schema = this.inner.inputSchema as {
-      properties?: Record<string, { type?: string; description?: string }>;
+      properties?: Record<string, Record<string, unknown>>;
       required?: string[];
     };
 
     const parameters = Object.entries(schema.properties ?? {}).map(([name, def]) => ({
       name,
       type: (def.type as string) ?? 'string',
-      description: def.description ?? '',
+      description: (def.description as string) ?? '',
       required: (schema.required ?? []).includes(name),
+      schema: def,
     }));
 
     return {
