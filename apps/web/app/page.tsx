@@ -1033,11 +1033,21 @@ function HarnessesTab({ harnesses, registry, onSaved }: {
   const [builtReport, setBuiltReport] = useState<string | null>(null);
   const [buildMeta, setBuildMeta] = useState<{ toolCallCount: number; iterations: number; elapsedMs: number } | null>(null);
   const [showLog, setShowLog] = useState(true);
+  const [runningIds, setRunningIds] = useState<Set<string>>(new Set());
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const logEndRef = useRef<HTMLDivElement>(null);
   const startTimeRef = useRef(0);
 
   useEffect(() => { logEndRef.current?.scrollIntoView({ behavior: "smooth" }); }, [buildLog]);
+
+  const handleRunHarness = async (harnessId: string) => {
+    setRunningIds(prev => new Set(prev).add(harnessId));
+    try {
+      await fetch(`/api/harnesses/${harnessId}/run`, { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" });
+    } finally {
+      setRunningIds(prev => { const next = new Set(prev); next.delete(harnessId); return next; });
+    }
+  };
 
   const handleBuild = async () => {
     if (!processDesc.trim() || isBuilding) return;
@@ -1045,6 +1055,10 @@ function HarnessesTab({ harnesses, registry, onSaved }: {
     startTimeRef.current = Date.now();
     try {
       const res = await fetch("/api/analyze", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ query: processDesc }) });
+      if (!res.ok) {
+        const errBody = await res.json().catch(() => ({ error: `서버 오류 (${res.status})` }));
+        throw new Error(errBody.error ?? `서버 오류 (${res.status})`);
+      }
       if (!res.body) throw new Error("No response body");
       const reader = res.body.getReader();
       const decoder = new TextDecoder();
@@ -1064,6 +1078,7 @@ function HarnessesTab({ harnesses, registry, onSaved }: {
           } catch { /* ignore */ }
         }
       }
+      if (!builtReport) setBuildLog(p => [...p, { kind: "error", message: "응답을 받지 못했습니다." }]);
     } catch (err) {
       setBuildLog(p => [...p, { kind: "error", message: err instanceof Error ? err.message : String(err) }]);
     } finally { setIsBuilding(false); }
@@ -1115,8 +1130,17 @@ function HarnessesTab({ harnesses, registry, onSaved }: {
                     {h.schedule.type === "cron" ? `크론: ${h.schedule.cron}` : "즉시 실행"} · {h.steps.length}단계
                   </div>
                 </div>
-                <div className="text-[11px]" style={{ color: "var(--text-tertiary)" }}>
-                  {new Date(h.createdAt).toLocaleDateString("ko-KR")}
+                <div className="flex flex-col items-end gap-2">
+                  <div className="text-[11px]" style={{ color: "var(--text-tertiary)" }}>
+                    {new Date(h.createdAt).toLocaleDateString("ko-KR")}
+                  </div>
+                  <button
+                    onClick={() => handleRunHarness(h.id)}
+                    disabled={runningIds.has(h.id)}
+                    className="px-3 py-1 rounded-lg text-[12px] font-medium"
+                    style={{ background: runningIds.has(h.id) ? "var(--border)" : "var(--accent)", color: runningIds.has(h.id) ? "var(--text-tertiary)" : "white" }}>
+                    {runningIds.has(h.id) ? "실행 중..." : "▶ 실행"}
+                  </button>
                 </div>
               </div>
             ))}
@@ -1225,7 +1249,7 @@ function HarnessesTab({ harnesses, registry, onSaved }: {
 function ObservabilityTab() {
   const [queue, setQueue] = useState<{ jobs: unknown[]; metrics: { totalJobs: number; pending: number; running: number; completed: number; failed: number } } | null>(null);
   useEffect(() => { fetch("/api/queue").then(r => r.json()).then(setQueue).catch(console.error); }, []);
-  type Job = { id: string; harnessName: string; trigger: string; scheduledAt: string; duration: number | null; status: string };
+  type Job = { id: string; harnessName: string; trigger: string; startedAt: string; durationMs: number | null; status: string; error: string | null };
   const jobs = (queue?.jobs ?? []) as Job[];
   const metrics = queue?.metrics;
 
@@ -1268,9 +1292,9 @@ function ObservabilityTab() {
                 style={{ gridTemplateColumns: "2fr 1fr 1fr 1fr 1fr", borderTop: i > 0 ? "1px solid var(--border)" : "none" }}>
                 <div className="font-medium" style={{ color: "var(--text-primary)" }}>{job.harnessName}</div>
                 <span style={{ color: "var(--text-secondary)" }}>{job.trigger}</span>
-                <span style={{ color: "var(--text-secondary)" }}>{new Date(job.scheduledAt).toLocaleTimeString("ko-KR", { hour: "2-digit", minute: "2-digit" })}</span>
-                <span style={{ color: "var(--text-secondary)" }}>{job.duration ? `${job.duration}s` : "-"}</span>
-                <span className="text-[11px] font-medium" style={{ color: s.color }}>{s.label}</span>
+                <span style={{ color: "var(--text-secondary)" }}>{job.startedAt ? new Date(job.startedAt).toLocaleTimeString("ko-KR", { hour: "2-digit", minute: "2-digit" }) : "-"}</span>
+                <span style={{ color: "var(--text-secondary)" }}>{job.durationMs != null ? `${(job.durationMs / 1000).toFixed(1)}s` : "-"}</span>
+                <span className="text-[11px] font-medium" title={job.error ?? undefined} style={{ color: s.color }}>{s.label}</span>
               </div>
             );
           })}

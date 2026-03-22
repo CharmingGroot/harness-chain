@@ -1,5 +1,5 @@
 /**
- * Tests for harness executor (mocked orchestrator)
+ * Tests for harness executor (mocked orchestrator + Redis)
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { saveHarness, listRuns } from '../lib/store';
@@ -18,10 +18,16 @@ vi.mock('../lib/orchestrator', () => ({
   },
 }));
 
+const { mockClose, mockMarkRunning, mockClearRunning } = vi.hoisted(() => ({
+  mockClose: vi.fn().mockResolvedValue(undefined),
+  mockMarkRunning: vi.fn().mockResolvedValue(undefined),
+  mockClearRunning: vi.fn().mockResolvedValue(undefined),
+}));
+
 vi.mock('../lib/sources/postgresql', () => ({
   createPgSandboxSource: vi.fn().mockReturnValue({
     ping: vi.fn().mockResolvedValue(true),
-    close: vi.fn().mockResolvedValue(undefined),
+    close: mockClose,
     getTools: vi.fn().mockReturnValue([]),
     name: 'pg-sandbox',
     id: 'pg-sandbox',
@@ -29,17 +35,31 @@ vi.mock('../lib/sources/postgresql', () => ({
   }),
 }));
 
+vi.mock('../lib/run-state', () => ({
+  markRunning: mockMarkRunning,
+  clearRunning: mockClearRunning,
+  getActiveRunIds: vi.fn().mockResolvedValue([]),
+  isRunActive: vi.fn().mockResolvedValue(false),
+  recoverOrphanedRuns: vi.fn().mockResolvedValue(0),
+}));
+
 import { executeHarness, scheduleHarness, unscheduleHarness, listScheduledJobs } from '../lib/executor';
 
 describe('executeHarness', () => {
   beforeEach(() => {
     mockRun.mockReset();
+    mockClose.mockReset();
+    mockMarkRunning.mockReset();
+    mockClearRunning.mockReset();
     mockRun.mockResolvedValue({
       report: '## 요약\n모의 분석 완료',
       sourcesUsed: ['pg-sandbox'],
       toolCallCount: 3,
       iterations: 2,
     });
+    mockMarkRunning.mockResolvedValue(undefined);
+    mockClearRunning.mockResolvedValue(undefined);
+    mockClose.mockResolvedValue(undefined);
   });
 
   it('runs a harness and returns completed run', async () => {
@@ -115,6 +135,44 @@ describe('executeHarness', () => {
     expect(run.meta?.toolCallCount).toBe(3);
     expect(run.meta?.iterations).toBe(2);
   });
+
+  it('calls markRunning at execution start', async () => {
+    const h = saveHarness({ name: 'Redis 마킹 테스트', description: '', steps: [], schedule: { type: 'once' } });
+    const run = await executeHarness(h.id);
+    expect(mockMarkRunning).toHaveBeenCalledOnce();
+    expect(mockMarkRunning).toHaveBeenCalledWith(run.id, h.id);
+  });
+
+  it('calls clearRunning after successful completion', async () => {
+    const h = saveHarness({ name: '완료 후 Redis 정리', description: '', steps: [], schedule: { type: 'once' } });
+    const run = await executeHarness(h.id);
+    expect(run.status).toBe('completed');
+    expect(mockClearRunning).toHaveBeenCalledOnce();
+    expect(mockClearRunning).toHaveBeenCalledWith(run.id);
+  });
+
+  it('calls clearRunning even when orchestrator throws', async () => {
+    mockRun.mockRejectedValueOnce(new Error('오케스트레이터 폭발'));
+    const h = saveHarness({ name: '실패해도 Redis 정리', description: '', steps: [], schedule: { type: 'once' } });
+    const run = await executeHarness(h.id);
+    expect(run.status).toBe('failed');
+    expect(mockClearRunning).toHaveBeenCalledOnce();
+    expect(mockClearRunning).toHaveBeenCalledWith(run.id);
+  });
+
+  it('always calls source.close() in finally — success path', async () => {
+    const h = saveHarness({ name: 'source.close 성공', description: '', steps: [], schedule: { type: 'once' } });
+    await executeHarness(h.id);
+    expect(mockClose).toHaveBeenCalledOnce();
+  });
+
+  it('always calls source.close() in finally — failure path', async () => {
+    mockRun.mockRejectedValueOnce(new Error('crash'));
+    const h = saveHarness({ name: 'source.close 실패', description: '', steps: [], schedule: { type: 'once' } });
+    await executeHarness(h.id);
+    expect(mockClose).toHaveBeenCalledOnce();
+  });
+
 });
 
 describe('scheduleHarness / unscheduleHarness', () => {

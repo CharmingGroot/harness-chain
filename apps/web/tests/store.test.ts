@@ -142,6 +142,34 @@ describe('SubAgent store', () => {
   });
 });
 
+  it('deleteSubAgent returns false for non-existent id', () => {
+    expect(deleteSubAgent('sa_nonexistent')).toBe(false);
+  });
+
+  it('getSubAgent returns undefined for non-existent id', () => {
+    expect(getSubAgent('sa_ghost')).toBeUndefined();
+  });
+
+  it('updateSubAgent returns null for non-existent id', () => {
+    expect(updateSubAgent('sa_ghost', { name: '없음' })).toBeNull();
+  });
+
+  it('saves subagent with all fields', () => {
+    const a = saveSubAgent({
+      name: '전체 필드 테스트',
+      description: '설명',
+      systemPrompt: '시스템 프롬프트',
+      tools: ['execute_query', 'get_schema'],
+      model: 'claude-sonnet-4-6',
+      maxIterations: 15,
+    });
+    expect(a.id).toMatch(/^sa_/);
+    expect(a.model).toBe('claude-sonnet-4-6');
+    expect(a.maxIterations).toBe(15);
+    expect(a.createdAt).toBeTruthy();
+    expect(a.updatedAt).toBeTruthy();
+  });
+
 // ── Run store ─────────────────────────────────────────────────────────────────
 
 describe('Run store', () => {
@@ -201,5 +229,36 @@ describe('Run store', () => {
     const run = createRun(h.id);
     expect(getRun(run.id)).toMatchObject({ id: run.id });
     expect(getRun('run_nonexistent')).toBeUndefined();
+  });
+
+  it('updateRun returns null for non-existent run id', () => {
+    expect(updateRun('run_ghost', { status: 'completed' })).toBeNull();
+  });
+
+  it('run id format starts with run_', () => {
+    const h = saveHarness({ name: 'ID 포맷', description: '', steps: [], schedule: { type: 'once' } });
+    const run = createRun(h.id);
+    expect(run.id).toMatch(/^run_/);
+  });
+
+  it('listRuns with no filter returns all runs across harnesses', () => {
+    const h1 = saveHarness({ name: 'H1', description: '', steps: [], schedule: { type: 'once' } });
+    const h2 = saveHarness({ name: 'H2', description: '', steps: [], schedule: { type: 'once' } });
+    createRun(h1.id);
+    createRun(h2.id);
+    expect(listRuns()).toHaveLength(2);
+  });
+
+  it('run has startedAt timestamp in ISO format', () => {
+    const h = saveHarness({ name: '타임스탬프 런', description: '', steps: [], schedule: { type: 'once' } });
+    const run = createRun(h.id);
+    expect(run.startedAt).toMatch(/^\d{4}-\d{2}-\d{2}T/);
+  });
+
+  it('run durationMs is set after update', () => {
+    const h = saveHarness({ name: '소요시간 테스트', description: '', steps: [], schedule: { type: 'once' } });
+    const run = createRun(h.id);
+    const updated = updateRun(run.id, { status: 'completed', durationMs: 4200, completedAt: new Date().toISOString() });
+    expect(updated?.durationMs).toBe(4200);
   });
 });

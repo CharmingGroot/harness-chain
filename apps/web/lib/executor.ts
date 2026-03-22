@@ -20,6 +20,9 @@ export async function executeHarness(
   const harness = getHarness(harnessId);
   if (!harness) throw new Error(`Harness not found: ${harnessId}`);
 
+  const apiKey = process.env.ANTHROPIC_API_KEY;
+  if (!apiKey) throw new Error('ANTHROPIC_API_KEY not set');
+
   const run = createRun(harnessId);
   const startedAt = Date.now();
 
@@ -29,9 +32,6 @@ export async function executeHarness(
   await markRunning(run.id, harnessId);
 
   const task = prompt ?? buildPromptFromHarness(harness);
-  const apiKey = process.env.ANTHROPIC_API_KEY;
-  if (!apiKey) throw new Error('ANTHROPIC_API_KEY not set');
-
   const source = createPgSandboxSource();
   const orchestrator = new Orchestrator({
     apiKey,
