@@ -1065,7 +1065,13 @@ function SubAgentsTab({ subAgents, tools, onSaved }: { subAgents: SubAgent[]; to
                     {a.description && <div className="text-[12px] mt-0.5" style={{ color: "var(--text-secondary)" }}>{a.description}</div>}
                     <div className="text-[11px] mt-2 line-clamp-2" style={{ color: "var(--text-tertiary)" }}>{a.systemPrompt}</div>
                     <div className="flex flex-wrap gap-1 mt-2">
-                      <span className="px-1.5 py-0.5 rounded text-[10px]" style={{ background: "var(--accent-light)", color: "var(--accent)" }}>{a.model?.replace("claude-", "").replace("-20251001", "") ?? "sonnet-4-6"}</span>
+                      <span className="px-1.5 py-0.5 rounded text-[10px]" style={{ background: "var(--accent-light)", color: "var(--accent)" }}>{
+                        (() => {
+                          const m = a.model ?? "claude-sonnet-4-6";
+                          if (m.startsWith("gpt-") || m.startsWith("o1") || m.startsWith("o3")) return m;
+                          return m.replace("claude-", "").replace("-20251001", "");
+                        })()
+                      }</span>
                       {a.tools.map(t => (
                         <span key={t} className="px-1.5 py-0.5 rounded text-[10px] font-mono" style={{ background: "var(--border)", color: "var(--text-secondary)" }}>{t}</span>
                       ))}
@@ -1181,25 +1187,37 @@ function SubAgentsTab({ subAgents, tools, onSaved }: { subAgents: SubAgent[]; to
                   {/* 모델 선택 */}
                   <div>
                     <div className="text-[12px] font-semibold mb-2 uppercase tracking-wide" style={{ color: "var(--text-secondary)" }}>모델</div>
-                    <div className="flex flex-wrap gap-2">
-                      {[
-                        { id: "claude-opus-4-6", label: "Opus 4.6", desc: "최고 성능" },
-                        { id: "claude-sonnet-4-6", label: "Sonnet 4.6", desc: "균형" },
-                        { id: "claude-haiku-4-5-20251001", label: "Haiku 4.5", desc: "빠름" },
-                      ].map(m => (
-                        <button key={m.id} onClick={() => setSelectedModel(m.id)}
-                          className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-[12px] transition-colors"
-                          style={{
-                            border: `1px solid ${selectedModel === m.id ? "var(--accent)" : "var(--border)"}`,
-                            background: selectedModel === m.id ? "var(--accent-light)" : "var(--sidebar-bg)",
-                            color: selectedModel === m.id ? "var(--accent)" : "var(--text-secondary)",
-                          }}>
-                          <span>{selectedModel === m.id ? "✓" : "○"}</span>
-                          <span>{m.label}</span>
-                          <span className="opacity-60">· {m.desc}</span>
-                        </button>
-                      ))}
-                    </div>
+                    {[
+                      { provider: "Anthropic", models: [
+                        { id: "claude-opus-4-6", label: "Claude Opus 4.6", desc: "최고 성능" },
+                        { id: "claude-sonnet-4-6", label: "Claude Sonnet 4.6", desc: "균형" },
+                        { id: "claude-haiku-4-5-20251001", label: "Claude Haiku 4.5", desc: "빠름" },
+                      ]},
+                      { provider: "OpenAI", models: [
+                        { id: "gpt-4o", label: "GPT-4o", desc: "최고 성능" },
+                        { id: "gpt-4o-mini", label: "GPT-4o mini", desc: "빠름·저렴" },
+                        { id: "o3-mini", label: "o3-mini", desc: "추론 특화" },
+                      ]},
+                    ].map(group => (
+                      <div key={group.provider} className="mb-3">
+                        <div className="text-[10px] mb-1.5 uppercase tracking-wider" style={{ color: "var(--text-tertiary)" }}>{group.provider}</div>
+                        <div className="flex flex-wrap gap-2">
+                          {group.models.map(m => (
+                            <button key={m.id} onClick={() => setSelectedModel(m.id)}
+                              className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-[12px] transition-colors"
+                              style={{
+                                border: `1px solid ${selectedModel === m.id ? "var(--accent)" : "var(--border)"}`,
+                                background: selectedModel === m.id ? "var(--accent-light)" : "var(--sidebar-bg)",
+                                color: selectedModel === m.id ? "var(--accent)" : "var(--text-secondary)",
+                              }}>
+                              <span>{selectedModel === m.id ? "✓" : "○"}</span>
+                              <span>{m.label}</span>
+                              <span className="opacity-60">· {m.desc}</span>
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                    ))}
                   </div>
 
                   {/* 액션 */}

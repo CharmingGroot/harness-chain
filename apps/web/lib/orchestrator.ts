@@ -4,12 +4,31 @@
  * into the parent AgentLoop, enabling parallel delegation via ToolDispatcher.
  */
 import { Registry, EventBus } from '@charming_groot/core';
-import type { ITool as CATool } from '@charming_groot/core';
-import { ClaudeProvider } from '@charming_groot/providers';
+import type { ITool as CATool, ILlmProvider, ProviderConfig } from '@charming_groot/core';
+import { ClaudeProvider, OpenAIProvider } from '@charming_groot/providers';
 import { AgentLoop, SubAgentTool } from '@charming_groot/agent';
 import type { ISource, AnalyzeEvent, RunResult } from './types';
 import { HarnessToolAdapter } from './ca-adapter';
 import { listSubAgents } from './store';
+
+// ── Provider factory ──────────────────────────────────────────────────────────
+
+function resolveProvider(model: string, maxTokens: number): ILlmProvider {
+  const isOpenAI = model.startsWith('gpt-') || model.startsWith('o1') || model.startsWith('o3');
+  const config: ProviderConfig = {
+    providerId: isOpenAI ? 'openai' : 'claude',
+    model,
+    auth: {
+      type: 'api-key',
+      apiKey: isOpenAI
+        ? (process.env.OPENAI_API_KEY ?? '')
+        : (process.env.ANTHROPIC_API_KEY ?? ''),
+    },
+    maxTokens,
+    temperature: 0.7,
+  };
+  return isOpenAI ? new OpenAIProvider(config) : new ClaudeProvider(config);
+}
 
 export interface OrchestratorConfig {
   apiKey: string;
@@ -71,13 +90,7 @@ export class Orchestrator {
     // Register persisted sub-agents as SubAgentTools (parallel delegation)
     const subAgentDefs = listSubAgents();
     for (const def of subAgentDefs) {
-      const subProvider = new ClaudeProvider({
-        providerId: 'claude',
-        model: def.model,
-        auth: { type: 'api-key', apiKey: this.apiKey },
-        maxTokens: 4096,
-        temperature: 0.7,
-      });
+      const subProvider = resolveProvider(def.model, 4096);
 
       const subToolRegistry = new Registry<CATool>('tool');
       for (const toolName of def.tools) {
@@ -97,13 +110,8 @@ export class Orchestrator {
       toolRegistry.register(subAgentTool.name, subAgentTool);
     }
 
-    const provider = new ClaudeProvider({
-      providerId: 'claude',
-      model: this.model,
-      auth: { type: 'api-key', apiKey: this.apiKey },
-      maxTokens: 8096,
-      temperature: 0.7,
-    });
+    const isOpenAI = this.model.startsWith('gpt-') || this.model.startsWith('o1') || this.model.startsWith('o3');
+    const provider = resolveProvider(this.model, 8096);
 
     const eventBus = new EventBus();
     let toolCallCount = 0;
@@ -123,9 +131,14 @@ export class Orchestrator {
       toolRegistry,
       config: {
         provider: {
-          providerId: 'claude',
+          providerId: isOpenAI ? 'openai' : 'claude',
           model: this.model,
-          auth: { type: 'api-key', apiKey: this.apiKey },
+          auth: {
+            type: 'api-key',
+            apiKey: isOpenAI
+              ? (process.env.OPENAI_API_KEY ?? '')
+              : this.apiKey,
+          },
           maxTokens: 8096,
           temperature: 0.7,
         },
