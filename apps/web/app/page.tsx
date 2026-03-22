@@ -388,12 +388,23 @@ function SessionItem({ session, active, isStreaming, preview, onClick, onDelete 
 // ── Chat View ─────────────────────────────────────────────────────────────────
 
 const CHAT_MODELS = [
-  { id: "claude-opus-4-6",        label: "Opus 4.6",       provider: "Anthropic" },
-  { id: "claude-sonnet-4-6",      label: "Sonnet 4.6",     provider: "Anthropic" },
-  { id: "claude-haiku-4-5-20251001", label: "Haiku 4.5",   provider: "Anthropic" },
-  { id: "gpt-4o",                 label: "GPT-4o",          provider: "OpenAI" },
-  { id: "gpt-4o-mini",            label: "GPT-4o mini",     provider: "OpenAI" },
-  { id: "o3-mini",                label: "o3-mini",         provider: "OpenAI" },
+  // Claude 4.x
+  { id: "claude-opus-4-6",              label: "Claude Opus 4.6",       provider: "Anthropic" },
+  { id: "claude-sonnet-4-6",            label: "Claude Sonnet 4.6",     provider: "Anthropic" },
+  { id: "claude-haiku-4-5-20251001",    label: "Claude Haiku 4.5",      provider: "Anthropic" },
+  // Claude 3.x
+  { id: "claude-3-5-sonnet-20241022",   label: "Claude 3.5 Sonnet",     provider: "Anthropic" },
+  { id: "claude-3-5-haiku-20241022",    label: "Claude 3.5 Haiku",      provider: "Anthropic" },
+  { id: "claude-3-opus-20240229",       label: "Claude 3 Opus",         provider: "Anthropic" },
+  { id: "claude-3-sonnet-20240229",     label: "Claude 3 Sonnet",       provider: "Anthropic" },
+  { id: "claude-3-haiku-20240307",      label: "Claude 3 Haiku",        provider: "Anthropic" },
+  // OpenAI
+  { id: "gpt-4o",                       label: "GPT-4o",                 provider: "OpenAI" },
+  { id: "gpt-4o-mini",                  label: "GPT-4o mini",            provider: "OpenAI" },
+  { id: "gpt-4-turbo",                  label: "GPT-4 Turbo",            provider: "OpenAI" },
+  { id: "o3-mini",                      label: "o3-mini",                provider: "OpenAI" },
+  { id: "o1",                           label: "o1",                     provider: "OpenAI" },
+  { id: "o1-mini",                      label: "o1-mini",                provider: "OpenAI" },
 ];
 
 function ChatView({ sessionId, messages, harnesses, registry, model, onModelChange, onSend }: {
@@ -1211,37 +1222,28 @@ function SubAgentsTab({ subAgents, tools, onSaved }: { subAgents: SubAgent[]; to
                   {/* 모델 선택 */}
                   <div>
                     <div className="text-[12px] font-semibold mb-2 uppercase tracking-wide" style={{ color: "var(--text-secondary)" }}>모델</div>
-                    {[
-                      { provider: "Anthropic", models: [
-                        { id: "claude-opus-4-6", label: "Claude Opus 4.6", desc: "최고 성능" },
-                        { id: "claude-sonnet-4-6", label: "Claude Sonnet 4.6", desc: "균형" },
-                        { id: "claude-haiku-4-5-20251001", label: "Claude Haiku 4.5", desc: "빠름" },
-                      ]},
-                      { provider: "OpenAI", models: [
-                        { id: "gpt-4o", label: "GPT-4o", desc: "최고 성능" },
-                        { id: "gpt-4o-mini", label: "GPT-4o mini", desc: "빠름·저렴" },
-                        { id: "o3-mini", label: "o3-mini", desc: "추론 특화" },
-                      ]},
-                    ].map(group => (
-                      <div key={group.provider} className="mb-3">
-                        <div className="text-[10px] mb-1.5 uppercase tracking-wider" style={{ color: "var(--text-tertiary)" }}>{group.provider}</div>
-                        <div className="flex flex-wrap gap-2">
-                          {group.models.map(m => (
-                            <button key={m.id} onClick={() => setSelectedModel(m.id)}
-                              className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-[12px] transition-colors"
-                              style={{
-                                border: `1px solid ${selectedModel === m.id ? "var(--accent)" : "var(--border)"}`,
-                                background: selectedModel === m.id ? "var(--accent-light)" : "var(--sidebar-bg)",
-                                color: selectedModel === m.id ? "var(--accent)" : "var(--text-secondary)",
-                              }}>
-                              <span>{selectedModel === m.id ? "✓" : "○"}</span>
-                              <span>{m.label}</span>
-                              <span className="opacity-60">· {m.desc}</span>
-                            </button>
-                          ))}
+                    {(["Anthropic", "OpenAI"] as const).map(provider => {
+                      const models = CHAT_MODELS.filter(m => m.provider === provider);
+                      return (
+                        <div key={provider} className="mb-3">
+                          <div className="text-[10px] mb-1.5 uppercase tracking-wider" style={{ color: "var(--text-tertiary)" }}>{provider}</div>
+                          <div className="flex flex-wrap gap-2">
+                            {models.map(m => (
+                              <button key={m.id} onClick={() => setSelectedModel(m.id)}
+                                className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-[12px] transition-colors"
+                                style={{
+                                  border: `1px solid ${selectedModel === m.id ? "var(--accent)" : "var(--border)"}`,
+                                  background: selectedModel === m.id ? "var(--accent-light)" : "var(--sidebar-bg)",
+                                  color: selectedModel === m.id ? "var(--accent)" : "var(--text-secondary)",
+                                }}>
+                                <span>{selectedModel === m.id ? "✓" : "○"}</span>
+                                <span>{m.label}</span>
+                              </button>
+                            ))}
+                          </div>
                         </div>
-                      </div>
-                    ))}
+                      );
+                    })}
                   </div>
 
                   {/* 액션 */}
