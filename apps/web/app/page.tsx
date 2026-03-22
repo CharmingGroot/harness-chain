@@ -8,7 +8,7 @@ import { renderMarkdown } from "@/lib/markdown";
 
 interface Source { id: string; name: string; type: string; description: string; status: string; }
 interface Tool { id: string; name: string; category: string; description: string; comingSoon?: boolean; }
-interface SubAgent { id: string; name: string; description: string; tools: string[]; systemPrompt: string; createdAt: string; }
+interface SubAgent { id: string; name: string; description: string; tools: string[]; systemPrompt: string; skills?: string; rules?: string; createdAt: string; }
 interface RealHarness {
   id: string; name: string; description: string;
   schedule: { type: "once" | "cron"; cron?: string };
@@ -293,7 +293,7 @@ export default function Home() {
           )}
           {navTab === "sources" && <SourcesTab />}
           {navTab === "tools" && <ToolsTab />}
-          {navTab === "subagents" && <SubAgentsTab subAgents={registry.subAgents} onSaved={refreshAll} />}
+          {navTab === "subagents" && <SubAgentsTab subAgents={registry.subAgents} tools={registry.tools} onSaved={refreshAll} />}
           {navTab === "harnesses" && (
             <HarnessesTab
               harnesses={harnesses}
@@ -934,89 +934,289 @@ function ToolsTab() {
 
 // ── SubAgents Tab ─────────────────────────────────────────────────────────────
 
-function SubAgentsTab({ subAgents, onSaved }: { subAgents: SubAgent[]; onSaved: () => void }) {
-  const [showForm, setShowForm] = useState(subAgents.length === 0);
-  const [name, setName] = useState("");
-  const [desc, setDesc] = useState("");
-  const [prompt, setPrompt] = useState("");
+const SA_TEMPLATES = [
+  { label: "🔍 VIP 이탈 분석기", desc: "VIP 등급 고객의 거래 패턴을 분석해서 이탈 위험을 예측하고 위험 고객 목록을 추출하는 에이전트" },
+  { label: "🚨 이상 거래 탐지기", desc: "금융 거래 데이터에서 비정상적인 패턴(고액, 심야, 연속)을 감지하고 위험 트랜잭션을 식별하는 에이전트" },
+  { label: "📊 데이터 리포터", desc: "데이터베이스를 조회해서 현황과 트렌드를 요약한 경영진용 리포트를 자동으로 작성하는 에이전트" },
+];
+
+function SubAgentsTab({ subAgents, tools, onSaved }: { subAgents: SubAgent[]; tools: Tool[]; onSaved: () => void }) {
+  const [mode, setMode] = useState<"list" | "build">(subAgents.length === 0 ? "build" : "list");
+  const [processDesc, setProcessDesc] = useState("");
+  const [isBuilding, setIsBuilding] = useState(false);
+  const [buildLog, setBuildLog] = useState<LogEntry[]>([]);
+
+  // Editable built result
+  const [builtResult, setBuiltResult] = useState(false);
+  const [builtName, setBuiltName] = useState("");
+  const [builtDesc, setBuiltDesc] = useState("");
+  const [builtSystemPrompt, setBuiltSystemPrompt] = useState("");
+  const [builtSkills, setBuiltSkills] = useState("");
+  const [builtRules, setBuiltRules] = useState("");
+  const [selectedTools, setSelectedTools] = useState<Set<string>>(new Set());
   const [saving, setSaving] = useState(false);
 
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const logEndRef = useRef<HTMLDivElement>(null);
+  useEffect(() => { logEndRef.current?.scrollIntoView({ behavior: "smooth" }); }, [buildLog]);
+
+  const handleBuild = async () => {
+    if (!processDesc.trim() || isBuilding) return;
+    setIsBuilding(true); setBuildLog([]); setBuiltResult(false);
+    try {
+      const res = await fetch("/api/subagents/build", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ description: processDesc }),
+      });
+      if (!res.ok) {
+        const errBody = await res.json().catch(() => ({ error: `서버 오류 (${res.status})` }));
+        throw new Error(errBody.error ?? `서버 오류 (${res.status})`);
+      }
+      if (!res.body) throw new Error("No response body");
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split("\n\n");
+        buffer = lines.pop() ?? "";
+        for (const line of lines) {
+          if (!line.startsWith("data: ")) continue;
+          try {
+            const event = JSON.parse(line.slice(6));
+            if (event.type === "thinking") {
+              setBuildLog(p => [...p, { kind: "thinking", text: event.text }]);
+            } else if (event.type === "result") {
+              const d = event.data;
+              setBuiltName(d.name ?? "");
+              setBuiltDesc(d.description ?? "");
+              setBuiltSystemPrompt(d.systemPrompt ?? "");
+              setBuiltSkills(d.skills ?? "");
+              setBuiltRules(d.rules ?? "");
+              setBuiltResult(true);
+              setBuildLog([]);
+            } else if (event.type === "error") {
+              setBuildLog(p => [...p, { kind: "error", message: event.message }]);
+            }
+          } catch { /* ignore */ }
+        }
+      }
+    } catch (err) {
+      setBuildLog(p => [...p, { kind: "error", message: err instanceof Error ? err.message : String(err) }]);
+    } finally { setIsBuilding(false); }
+  };
+
+  const toggleTool = (toolId: string) => {
+    setSelectedTools(prev => {
+      const next = new Set(prev);
+      next.has(toolId) ? next.delete(toolId) : next.add(toolId);
+      return next;
+    });
+  };
+
   const handleSave = async () => {
-    if (!name.trim() || !prompt.trim()) return;
+    if (!builtName.trim() || !builtSystemPrompt.trim()) return;
     setSaving(true);
     await fetch("/api/subagents", {
       method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ name, description: desc, systemPrompt: prompt, tools: ["execute_query", "get_schema"], model: "claude-sonnet-4-6", maxIterations: 20 }),
+      body: JSON.stringify({
+        name: builtName, description: builtDesc,
+        systemPrompt: builtSystemPrompt, skills: builtSkills, rules: builtRules,
+        tools: Array.from(selectedTools), model: "claude-sonnet-4-6", maxIterations: 20,
+      }),
     });
     setSaving(false);
-    setName(""); setDesc(""); setPrompt("");
-    setShowForm(false);
+    setBuiltResult(false); setBuildLog([]); setProcessDesc("");
+    setMode("list");
     onSaved();
   };
 
+  const availableTools = tools.filter(t => !t.comingSoon);
+
   return (
-    <div className="flex-1 overflow-y-auto px-10 py-8">
-      <div className="max-w-2xl">
-        <div className="flex items-center justify-between mb-6">
-          <div>
-            <h1 className="text-[20px] font-semibold" style={{ color: "var(--text-primary)" }}>서브에이전트</h1>
-            <p className="text-[13px] mt-0.5" style={{ color: "var(--text-secondary)" }}>특정 업무에 특화된 에이전트를 관리합니다</p>
-          </div>
-          <button onClick={() => setShowForm(o => !o)}
-            className="px-3 py-1.5 rounded-lg text-[12.5px] font-medium"
-            style={{ background: showForm ? "var(--border)" : "var(--accent)", color: showForm ? "var(--text-secondary)" : "white" }}>
-            {showForm ? "취소" : "+ 새로 만들기"}
+    <div className="flex-1 flex flex-col overflow-hidden">
+      <div className="flex-none flex items-center gap-1 px-8 pt-5 pb-0">
+        {(["list", "build"] as const).map(m => (
+          <button key={m} onClick={() => setMode(m)}
+            className="px-3 py-1.5 text-[13px]"
+            style={{ borderBottom: mode === m ? "2px solid var(--accent)" : "2px solid transparent", color: mode === m ? "var(--accent)" : "var(--text-secondary)", fontWeight: mode === m ? 500 : 400 }}>
+            {m === "list" ? `에이전트 목록 (${subAgents.length})` : "+ 새로 만들기"}
           </button>
-        </div>
-        {showForm && (
-          <div className="mb-8 rounded-xl p-5" style={{ border: "1px solid var(--accent)", background: "var(--accent-light)" }}>
-            <div className="text-[13px] font-medium mb-4" style={{ color: "var(--text-primary)" }}>새 서브에이전트</div>
-            <div className="space-y-3">
-              <FormField label="이름" required>
-                <input value={name} onChange={e => setName(e.target.value)} placeholder="예: VIP 이탈 분석기"
-                  className="w-full px-3 py-2 rounded-lg text-[13px] outline-none"
-                  style={{ border: "1px solid var(--border)", color: "var(--text-primary)", background: "white" }} />
-              </FormField>
-              <FormField label="설명">
-                <input value={desc} onChange={e => setDesc(e.target.value)} placeholder="한 줄 설명"
-                  className="w-full px-3 py-2 rounded-lg text-[13px] outline-none"
-                  style={{ border: "1px solid var(--border)", color: "var(--text-primary)", background: "white" }} />
-              </FormField>
-              <FormField label="시스템 프롬프트" required>
-                <textarea value={prompt} onChange={e => setPrompt(e.target.value)} rows={5}
-                  placeholder="이 에이전트의 역할과 행동 지침을 작성하세요..."
-                  className="w-full px-3 py-2 rounded-lg text-[13px] outline-none resize-none"
-                  style={{ border: "1px solid var(--border)", color: "var(--text-primary)", background: "white" }} />
-              </FormField>
-              <button onClick={handleSave} disabled={!name.trim() || !prompt.trim() || saving}
-                className="w-full py-2 rounded-lg text-[13px] font-medium"
-                style={{ background: name.trim() && prompt.trim() && !saving ? "var(--accent)" : "var(--border)", color: name.trim() && prompt.trim() && !saving ? "white" : "var(--text-tertiary)" }}>
-                {saving ? "저장 중..." : "저장"}
-              </button>
-            </div>
-          </div>
-        )}
-        {subAgents.length > 0 ? (
-          <div className="space-y-3">
-            {subAgents.map(a => (
+        ))}
+      </div>
+      <div className="flex-none" style={{ borderBottom: "1px solid var(--border)" }} />
+
+      {mode === "list" && (
+        <div className="flex-1 overflow-y-auto px-8 py-6">
+          <div className="max-w-2xl space-y-3">
+            {subAgents.length === 0 ? (
+              <div className="text-center py-12" style={{ color: "var(--text-tertiary)" }}>
+                <p>서브에이전트가 없습니다. 빌드 탭에서 만들어보세요.</p>
+              </div>
+            ) : subAgents.map(a => (
               <div key={a.id} className="rounded-xl px-5 py-4" style={{ border: "1px solid var(--border)", background: "var(--sidebar-bg)" }}>
                 <div className="flex items-start gap-3">
                   <span className="text-xl mt-0.5">🤖</span>
                   <div className="flex-1 min-w-0">
                     <div className="text-[14px] font-medium" style={{ color: "var(--text-primary)" }}>{a.name}</div>
                     {a.description && <div className="text-[12px] mt-0.5" style={{ color: "var(--text-secondary)" }}>{a.description}</div>}
-                    <div className="text-[11px] mt-2 line-clamp-2 font-mono" style={{ color: "var(--text-tertiary)" }}>{a.systemPrompt}</div>
+                    <div className="text-[11px] mt-2 line-clamp-2" style={{ color: "var(--text-tertiary)" }}>{a.systemPrompt}</div>
+                    {a.tools.length > 0 && (
+                      <div className="flex flex-wrap gap-1 mt-2">
+                        {a.tools.map(t => (
+                          <span key={t} className="px-1.5 py-0.5 rounded text-[10px] font-mono" style={{ background: "var(--border)", color: "var(--text-secondary)" }}>{t}</span>
+                        ))}
+                      </div>
+                    )}
                   </div>
                 </div>
               </div>
             ))}
           </div>
-        ) : !showForm && (
-          <div className="text-center py-10" style={{ color: "var(--text-tertiary)" }}>
-            <p className="text-[13px]">서브에이전트가 없습니다</p>
+        </div>
+      )}
+
+      {mode === "build" && (
+        <>
+          <div className="flex-1 overflow-y-auto">
+            <div className="max-w-2xl mx-auto px-8 py-6">
+              {!builtResult && buildLog.length === 0 && !isBuilding && (
+                <div className="flex flex-col items-center text-center py-8">
+                  <span className="text-3xl mb-3">🤖</span>
+                  <h2 className="text-[16px] font-semibold mb-1" style={{ color: "var(--text-primary)" }}>서브에이전트 빌드</h2>
+                  <p className="text-[13px] mb-6 max-w-sm leading-relaxed" style={{ color: "var(--text-secondary)" }}>
+                    어떤 업무를 맡길지 설명하면 AI가 에이전트를 설계합니다
+                  </p>
+                  <div className="w-full max-w-sm text-left">
+                    <p className="text-[11px] mb-2" style={{ color: "var(--text-tertiary)" }}>템플릿으로 빠르게 시작</p>
+                    <div className="flex flex-col gap-2">
+                      {SA_TEMPLATES.map(t => (
+                        <button key={t.label} onClick={() => { setProcessDesc(t.desc); setTimeout(() => textareaRef.current?.focus(), 50); }}
+                          className="text-left px-3 py-2.5 rounded-lg text-[13px]"
+                          style={{ border: "1px solid var(--border)", background: "var(--sidebar-bg)", color: "var(--text-primary)" }}>
+                          {t.label}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {(isBuilding || buildLog.length > 0) && (
+                <div className="mt-4">
+                  <div className="text-[11px] font-medium uppercase tracking-wider mb-3" style={{ color: "var(--text-tertiary)" }}>
+                    {isBuilding ? <span className="flex items-center gap-1.5"><span className="spinner" />생성 중...</span> : "실행 로그"}
+                  </div>
+                  <div className="rounded-lg overflow-hidden text-[12px] font-mono" style={{ background: "#f7f7f5", border: "1px solid var(--border)" }}>
+                    {buildLog.map((entry, i) => <LogLine key={i} entry={entry} />)}
+                    {isBuilding && <div className="px-4 py-2.5" style={{ color: "var(--text-tertiary)", borderTop: "1px solid var(--border)" }}><span className="animate-pulse">●</span> 설계 중...</div>}
+                    <div ref={logEndRef} />
+                  </div>
+                </div>
+              )}
+
+              {builtResult && (
+                <div className="mt-2 space-y-5">
+                  {/* 기본 정보 */}
+                  <div className="space-y-3">
+                    <FormField label="이름" required>
+                      <input value={builtName} onChange={e => setBuiltName(e.target.value)}
+                        className="w-full px-3 py-2 rounded-lg text-[13px] outline-none"
+                        style={{ border: "1px solid var(--border)", color: "var(--text-primary)", background: "white" }} />
+                    </FormField>
+                    <FormField label="설명">
+                      <input value={builtDesc} onChange={e => setBuiltDesc(e.target.value)}
+                        className="w-full px-3 py-2 rounded-lg text-[13px] outline-none"
+                        style={{ border: "1px solid var(--border)", color: "var(--text-primary)", background: "white" }} />
+                    </FormField>
+                  </div>
+
+                  {/* 시스템 프롬프트 */}
+                  <div>
+                    <div className="text-[12px] font-semibold mb-1.5 uppercase tracking-wide" style={{ color: "var(--text-secondary)" }}>시스템 프롬프트</div>
+                    <textarea value={builtSystemPrompt} onChange={e => setBuiltSystemPrompt(e.target.value)} rows={5}
+                      className="w-full px-3 py-2 rounded-lg text-[13px] outline-none resize-none"
+                      style={{ border: "1px solid var(--border)", color: "var(--text-primary)", background: "white" }} />
+                  </div>
+
+                  {/* Skills */}
+                  <div>
+                    <div className="text-[12px] font-semibold mb-1.5 uppercase tracking-wide" style={{ color: "var(--text-secondary)" }}>Skills 지침</div>
+                    <textarea value={builtSkills} onChange={e => setBuiltSkills(e.target.value)} rows={4}
+                      placeholder="이 에이전트가 할 수 있는 것들 (마크다운 불릿)"
+                      className="w-full px-3 py-2 rounded-lg text-[13px] outline-none resize-none font-mono"
+                      style={{ border: "1px solid var(--border)", color: "var(--text-primary)", background: "white" }} />
+                  </div>
+
+                  {/* Rules */}
+                  <div>
+                    <div className="text-[12px] font-semibold mb-1.5 uppercase tracking-wide" style={{ color: "var(--text-secondary)" }}>Rules (제약)</div>
+                    <textarea value={builtRules} onChange={e => setBuiltRules(e.target.value)} rows={4}
+                      placeholder="반드시 지켜야 할 제약과 금지사항 (마크다운 불릿)"
+                      className="w-full px-3 py-2 rounded-lg text-[13px] outline-none resize-none font-mono"
+                      style={{ border: "1px solid var(--border)", color: "var(--text-primary)", background: "white" }} />
+                  </div>
+
+                  {/* 소스 & 도구 선택 */}
+                  <div>
+                    <div className="text-[12px] font-semibold mb-2 uppercase tracking-wide" style={{ color: "var(--text-secondary)" }}>소스 & 도구</div>
+                    <div className="flex flex-wrap gap-2">
+                      {availableTools.map(t => (
+                        <button key={t.id} onClick={() => toggleTool(t.id)}
+                          className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-[12px] transition-colors"
+                          style={{
+                            border: `1px solid ${selectedTools.has(t.id) ? "var(--accent)" : "var(--border)"}`,
+                            background: selectedTools.has(t.id) ? "var(--accent-light)" : "var(--sidebar-bg)",
+                            color: selectedTools.has(t.id) ? "var(--accent)" : "var(--text-secondary)",
+                          }}>
+                          <span>{selectedTools.has(t.id) ? "✓" : "○"}</span>
+                          <span>{t.name}</span>
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  {/* 액션 */}
+                  <div className="flex items-center gap-3 pt-2">
+                    <button onClick={handleSave} disabled={!builtName.trim() || !builtSystemPrompt.trim() || saving}
+                      className="px-5 py-2 rounded-lg text-[13px] font-medium"
+                      style={{ background: builtName.trim() && builtSystemPrompt.trim() && !saving ? "var(--accent)" : "var(--border)", color: builtName.trim() && builtSystemPrompt.trim() && !saving ? "white" : "var(--text-tertiary)" }}>
+                      {saving ? "저장 중..." : "💾 에이전트 저장"}
+                    </button>
+                    <button onClick={() => { setBuiltResult(false); setBuildLog([]); setProcessDesc(""); }}
+                      className="px-4 py-2 rounded-lg text-[13px]"
+                      style={{ border: "1px solid var(--border)", color: "var(--text-secondary)" }}>
+                      다시 빌드
+                    </button>
+                  </div>
+                </div>
+              )}
+            </div>
           </div>
-        )}
-      </div>
+
+          <div className="flex-none px-8 py-4" style={{ borderTop: "1px solid var(--border)" }}>
+            <div className="max-w-2xl mx-auto">
+              <div className="rounded-xl overflow-hidden" style={{ border: "1px solid var(--border)", boxShadow: "0 1px 4px rgba(0,0,0,0.06)" }}>
+                <textarea ref={textareaRef} value={processDesc} onChange={e => setProcessDesc(e.target.value)}
+                  onKeyDown={e => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); handleBuild(); } }}
+                  placeholder="어떤 업무를 담당할 에이전트인지 설명하세요..."
+                  className="w-full px-4 py-3 text-[13.5px] outline-none resize-none"
+                  style={{ background: "var(--bg)", color: "var(--text-primary)", minHeight: 60 }} rows={2} />
+                <div className="flex items-center justify-between px-4 py-2" style={{ borderTop: "1px solid var(--border)", background: "var(--sidebar-bg)" }}>
+                  <span className="text-[11px]" style={{ color: "var(--text-tertiary)" }}>Enter로 빌드 · Shift+Enter 줄바꿈</span>
+                  <button onClick={handleBuild} disabled={!processDesc.trim() || isBuilding}
+                    className="px-4 py-1.5 rounded-lg text-[12.5px] font-medium"
+                    style={{ background: processDesc.trim() && !isBuilding ? "var(--accent)" : "var(--border)", color: processDesc.trim() && !isBuilding ? "white" : "var(--text-tertiary)" }}>
+                    {isBuilding ? "생성 중..." : "에이전트 빌드"}
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </>
+      )}
     </div>
   );
 }

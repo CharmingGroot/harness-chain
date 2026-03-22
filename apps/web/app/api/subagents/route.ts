@@ -7,10 +7,10 @@ export async function GET() {
 
 export async function POST(req: NextRequest) {
   const body = await req.json();
-  const { name, description, systemPrompt, tools = [], model = 'claude-sonnet-4-6', maxIterations = 25 } = body;
+  const { name, description, systemPrompt, skills, rules, tools = [], model = 'claude-sonnet-4-6', maxIterations = 25 } = body;
   if (!name || !systemPrompt) {
     return NextResponse.json({ error: 'name and systemPrompt required' }, { status: 400 });
   }
-  const agent = saveSubAgent({ name, description: description ?? '', systemPrompt, tools, model, maxIterations });
+  const agent = saveSubAgent({ name, description: description ?? '', systemPrompt, skills, rules, tools, model, maxIterations });
   return NextResponse.json(agent, { status: 201 });
 }

@@ -33,6 +33,8 @@ export interface SubAgentDef {
   name: string;
   description: string;
   systemPrompt: string;
+  skills?: string;       // markdown bullet list of what this agent can do
+  rules?: string;        // markdown bullet list of constraints
   tools: string[];       // tool names available to this sub-agent
   model: string;
   maxIterations: number;
