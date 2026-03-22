@@ -8,7 +8,7 @@ import { renderMarkdown } from "@/lib/markdown";
 
 interface Source { id: string; name: string; type: string; description: string; status: string; }
 interface Tool { id: string; name: string; category: string; description: string; comingSoon?: boolean; }
-interface SubAgent { id: string; name: string; description: string; tools: string[]; systemPrompt: string; skills?: string; rules?: string; createdAt: string; }
+interface SubAgent { id: string; name: string; description: string; tools: string[]; systemPrompt: string; skills?: string; rules?: string; model: string; createdAt: string; }
 interface RealHarness {
   id: string; name: string; description: string;
   schedule: { type: "once" | "cron"; cron?: string };
@@ -954,6 +954,7 @@ function SubAgentsTab({ subAgents, tools, onSaved }: { subAgents: SubAgent[]; to
   const [builtSkills, setBuiltSkills] = useState("");
   const [builtRules, setBuiltRules] = useState("");
   const [selectedTools, setSelectedTools] = useState<Set<string>>(new Set());
+  const [selectedModel, setSelectedModel] = useState("claude-sonnet-4-6");
   const [saving, setSaving] = useState(false);
 
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -1024,7 +1025,7 @@ function SubAgentsTab({ subAgents, tools, onSaved }: { subAgents: SubAgent[]; to
       body: JSON.stringify({
         name: builtName, description: builtDesc,
         systemPrompt: builtSystemPrompt, skills: builtSkills, rules: builtRules,
-        tools: Array.from(selectedTools), model: "claude-sonnet-4-6", maxIterations: 20,
+        tools: Array.from(selectedTools), model: selectedModel, maxIterations: 20,
       }),
     });
     setSaving(false);
@@ -1063,13 +1064,12 @@ function SubAgentsTab({ subAgents, tools, onSaved }: { subAgents: SubAgent[]; to
                     <div className="text-[14px] font-medium" style={{ color: "var(--text-primary)" }}>{a.name}</div>
                     {a.description && <div className="text-[12px] mt-0.5" style={{ color: "var(--text-secondary)" }}>{a.description}</div>}
                     <div className="text-[11px] mt-2 line-clamp-2" style={{ color: "var(--text-tertiary)" }}>{a.systemPrompt}</div>
-                    {a.tools.length > 0 && (
-                      <div className="flex flex-wrap gap-1 mt-2">
-                        {a.tools.map(t => (
-                          <span key={t} className="px-1.5 py-0.5 rounded text-[10px] font-mono" style={{ background: "var(--border)", color: "var(--text-secondary)" }}>{t}</span>
-                        ))}
-                      </div>
-                    )}
+                    <div className="flex flex-wrap gap-1 mt-2">
+                      <span className="px-1.5 py-0.5 rounded text-[10px]" style={{ background: "var(--accent-light)", color: "var(--accent)" }}>{a.model?.replace("claude-", "").replace("-20251001", "") ?? "sonnet-4-6"}</span>
+                      {a.tools.map(t => (
+                        <span key={t} className="px-1.5 py-0.5 rounded text-[10px] font-mono" style={{ background: "var(--border)", color: "var(--text-secondary)" }}>{t}</span>
+                      ))}
+                    </div>
                   </div>
                 </div>
               </div>
@@ -1173,6 +1173,30 @@ function SubAgentsTab({ subAgents, tools, onSaved }: { subAgents: SubAgent[]; to
                           }}>
                           <span>{selectedTools.has(t.id) ? "✓" : "○"}</span>
                           <span>{t.name}</span>
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  {/* 모델 선택 */}
+                  <div>
+                    <div className="text-[12px] font-semibold mb-2 uppercase tracking-wide" style={{ color: "var(--text-secondary)" }}>모델</div>
+                    <div className="flex flex-wrap gap-2">
+                      {[
+                        { id: "claude-opus-4-6", label: "Opus 4.6", desc: "최고 성능" },
+                        { id: "claude-sonnet-4-6", label: "Sonnet 4.6", desc: "균형" },
+                        { id: "claude-haiku-4-5-20251001", label: "Haiku 4.5", desc: "빠름" },
+                      ].map(m => (
+                        <button key={m.id} onClick={() => setSelectedModel(m.id)}
+                          className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-[12px] transition-colors"
+                          style={{
+                            border: `1px solid ${selectedModel === m.id ? "var(--accent)" : "var(--border)"}`,
+                            background: selectedModel === m.id ? "var(--accent-light)" : "var(--sidebar-bg)",
+                            color: selectedModel === m.id ? "var(--accent)" : "var(--text-secondary)",
+                          }}>
+                          <span>{selectedModel === m.id ? "✓" : "○"}</span>
+                          <span>{m.label}</span>
+                          <span className="opacity-60">· {m.desc}</span>
                         </button>
                       ))}
                     </div>
