@@ -62,7 +62,7 @@ export default function Home() {
   const [sessionMessages, setSessionMessages] = useState<Record<string, ChatMessage[]>>({});
   const [navTab, setNavTab] = useState<NavTab>("chat");
   const [rightOpen, setRightOpen] = useState(false);
-  const [chatModel, setChatModel] = useState("claude-sonnet-4-6");
+  const [chatModel, setChatModel] = useState("gpt-5.2-mini");
   // aggregated running tool/log state for right panel (across all sessions)
   const [runningLogs, setRunningLogs] = useState<{ sessionId: string; msgId: string; logs: LogEntry[] }[]>([]);
 
@@ -399,6 +399,7 @@ const CHAT_MODELS = [
   { id: "claude-3-sonnet-20240229",     label: "Claude 3 Sonnet",       provider: "Anthropic" },
   { id: "claude-3-haiku-20240307",      label: "Claude 3 Haiku",        provider: "Anthropic" },
   // OpenAI
+  { id: "gpt-5.2-mini",                 label: "GPT-5.2 mini",           provider: "OpenAI" },
   { id: "gpt-4o",                       label: "GPT-4o",                 provider: "OpenAI" },
   { id: "gpt-4o-mini",                  label: "GPT-4o mini",            provider: "OpenAI" },
   { id: "gpt-4-turbo",                  label: "GPT-4 Turbo",            provider: "OpenAI" },
@@ -989,7 +990,7 @@ function SubAgentsTab({ subAgents, tools, onSaved }: { subAgents: SubAgent[]; to
   const [builtSkills, setBuiltSkills] = useState("");
   const [builtRules, setBuiltRules] = useState("");
   const [selectedTools, setSelectedTools] = useState<Set<string>>(new Set());
-  const [selectedModel, setSelectedModel] = useState("claude-sonnet-4-6");
+  const [selectedModel, setSelectedModel] = useState("gpt-5.2-mini");
   const [saving, setSaving] = useState(false);
 
   const textareaRef = useRef<HTMLTextAreaElement>(null);
