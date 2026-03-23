@@ -1,6 +1,8 @@
 "use client";
 
-import React, { useState, useEffect, useRef, useCallback } from "react";
+import React, { useState, useEffect, useRef, useCallback, useMemo } from "react";
+import { ReactFlow, Handle, Position, MarkerType } from "@xyflow/react";
+import type { Node as RFNode, Edge as RFEdge, NodeProps } from "@xyflow/react";
 import type { AnalyzeEvent } from "@/lib/types";
 import { renderMarkdown } from "@/lib/markdown";
 import { useJob, STEP_LABELS, getStepProgress } from "./job-context";
@@ -806,53 +808,44 @@ function NoChatState({ onCreateSession }: { onCreateSession: () => void }) {
   );
 }
 
-// ── Harness Flow Graph (LangGraph-style SVG) ──────────────────────────────────
+// ── Harness Flow Graph (ReactFlow HTML/CSS 노드) ───────────────────────────────
 
-const FLOW_NODE_W = 156;
-const FLOW_NODE_H = 44;
-const FLOW_LAYER_GAP = 72;
-const FLOW_NODE_H_GAP = 28;
+const RF_NODE_W = 160;
+const RF_NODE_H = 44;
+const RF_LAYER_GAP = 80;
+const RF_NODE_GAP = 30;
+const RF_TOP_PAD = 32;
 
-interface FlowNode {
-  id: string;
-  x: number;
-  y: number;
+type HFGKind = "start" | "end" | HarnessNode["kind"];
+interface HFGData {
   label: string;
-  kind: "start" | "end" | HarnessNode["kind"];
+  kind: HFGKind;
+  isActive: boolean;
+  isError: boolean;
+  isDone: boolean;
+  [key: string]: unknown; // ReactFlow requires index signature
 }
 
-/**
- * Layout algorithm: topological layer assignment from the actual edge graph.
- * Nodes at the same "depth" (same longest-path from __start__) share a row.
- */
-function computeFlowLayout(nodes: HarnessNode[], edges: HarnessEdge[], svgW: number): {
-  flowNodes: FlowNode[];
-  svgHeight: number;
-} {
-  // Build all IDs including virtual __start__ / __end__
+/** BFS topological layer assignment — same algorithm as before, now returns ReactFlow positions. */
+function computeFlowLayout(
+  nodes: HarnessNode[],
+  edges: HarnessEdge[],
+  containerW: number,
+): { rfNodes: RFNode<HFGData>[]; rfEdges: RFEdge[]; totalHeight: number } {
   const allIds = ["__start__", ...nodes.map(n => n.id), "__end__"];
 
-  // Compute layer depth via BFS from __start__
   const depth = new Map<string, number>();
   depth.set("__start__", 0);
   const queue = ["__start__"];
   while (queue.length) {
     const cur = queue.shift()!;
-    const curDepth = depth.get(cur) ?? 0;
-    edges
-      .filter(e => e.from === cur)
-      .forEach(e => {
-        const existing = depth.get(e.to) ?? -1;
-        if (existing < curDepth + 1) {
-          depth.set(e.to, curDepth + 1);
-          queue.push(e.to);
-        }
-      });
+    const d = depth.get(cur) ?? 0;
+    edges.filter(e => e.from === cur).forEach(e => {
+      if ((depth.get(e.to) ?? -1) < d + 1) { depth.set(e.to, d + 1); queue.push(e.to); }
+    });
   }
-  // Nodes with no depth assigned (isolated) go to depth 1
   allIds.forEach(id => { if (!depth.has(id)) depth.set(id, 1); });
 
-  // Group by depth
   const byLayer = new Map<number, string[]>();
   allIds.forEach(id => {
     const d = depth.get(id) ?? 0;
@@ -861,38 +854,95 @@ function computeFlowLayout(nodes: HarnessNode[], edges: HarnessEdge[], svgW: num
   });
 
   const sortedLayers = [...byLayer.entries()].sort(([a], [b]) => a - b);
-  const nodeKind = (id: string): FlowNode["kind"] => {
-    if (id === "__start__") return "start";
-    if (id === "__end__") return "end";
-    return nodes.find(n => n.id === id)?.kind ?? "tool";
-  };
-  const nodeLabel = (id: string) => {
-    if (id === "__start__") return "__start__";
-    if (id === "__end__") return "__end__";
+
+  const kindOf = (id: string): HFGKind =>
+    id === "__start__" ? "start" : id === "__end__" ? "end" : (nodes.find(n => n.id === id)?.kind ?? "tool");
+  const labelOf = (id: string) => {
+    if (id === "__start__" || id === "__end__") return id;
     const n = nodes.find(x => x.id === id);
     return n?.label ?? n?.ref ?? id;
   };
 
-  const TOP_PAD = 32;
-  const flowNodes: FlowNode[] = [];
+  const rfNodes: RFNode<HFGData>[] = [];
   sortedLayers.forEach(([, ids], li) => {
-    const cy = TOP_PAD + li * (FLOW_NODE_H + FLOW_LAYER_GAP) + FLOW_NODE_H / 2;
-    const totalW = ids.length * FLOW_NODE_W + (ids.length - 1) * FLOW_NODE_H_GAP;
-    const ox = (svgW - totalW) / 2;
+    const totalW = ids.length * RF_NODE_W + (ids.length - 1) * RF_NODE_GAP;
+    const ox = (containerW - totalW) / 2;
+    const y = RF_TOP_PAD + li * (RF_NODE_H + RF_LAYER_GAP);
     ids.forEach((id, ni) => {
-      flowNodes.push({
+      rfNodes.push({
         id,
-        x: ox + ni * (FLOW_NODE_W + FLOW_NODE_H_GAP) + FLOW_NODE_W / 2,
-        y: cy,
-        label: nodeLabel(id),
-        kind: nodeKind(id),
+        position: { x: ox + ni * (RF_NODE_W + RF_NODE_GAP), y },
+        type: "hfgNode",
+        data: { label: labelOf(id), kind: kindOf(id), isActive: false, isError: false, isDone: false },
+        draggable: false,
+        selectable: false,
+        connectable: false,
       });
     });
   });
 
-  const svgHeight = TOP_PAD + sortedLayers.length * (FLOW_NODE_H + FLOW_LAYER_GAP) - FLOW_LAYER_GAP + TOP_PAD;
-  return { flowNodes, svgHeight };
+  const rfEdges: RFEdge[] = edges.map(e => ({
+    id: e.id,
+    source: e.from,
+    target: e.to,
+    label: e.label,
+    type: "smoothstep",
+    style: {
+      stroke: "#94a3b8", strokeWidth: 1.5,
+      ...(e.condition ? { strokeDasharray: "5 3" } : {}),
+    },
+    labelStyle: { fontSize: 10, fill: "#64748b", fontStyle: "italic" },
+    markerEnd: { type: MarkerType.ArrowClosed, color: "#94a3b8", width: 14, height: 14 },
+  }));
+
+  const totalHeight = RF_TOP_PAD + sortedLayers.length * (RF_NODE_H + RF_LAYER_GAP) - RF_LAYER_GAP + RF_TOP_PAD;
+  return { rfNodes, rfEdges, totalHeight };
 }
+
+function HFGNodeComponent({ data }: NodeProps) {
+  const d = data as HFGData;
+  const isTerminal = d.kind === "start" || d.kind === "end";
+  const icon = d.kind === "subagent" ? "🤖" : d.kind === "tool" ? "⚙" : d.kind === "source" ? "📦" : "";
+  const truncLabel = d.label.length > 18 ? d.label.slice(0, 17) + "…" : d.label;
+
+  let bg = "#f0fdfa", border = "#2dd4bf", color = "#134e4a";
+  if (d.kind === "end") { bg = "#0d9488"; border = "#0d9488"; color = "#ffffff"; }
+  if (d.isError)        { bg = "#fef2f2"; border = "#f87171"; color = "#b91c1c"; }
+  else if (d.isDone)    { bg = "#dcfce7"; border = "#4ade80"; color = "#15803d"; }
+  else if (d.isActive)  { bg = "#ccfbf1"; border = "#14b8a6"; color = "#0f766e"; }
+
+  return (
+    <>
+      <Handle type="target" position={Position.Top}
+        style={{ background: "transparent", border: "none", width: 1, height: 1 }} />
+      <div style={{
+        width: RF_NODE_W, height: RF_NODE_H,
+        background: bg, border: `1.5px solid ${border}`,
+        borderRadius: isTerminal ? RF_NODE_H / 2 : 8,
+        display: "flex", alignItems: "center", justifyContent: "center",
+        fontSize: 12, fontWeight: isTerminal ? 600 : 500,
+        fontFamily: isTerminal ? "monospace" : "inherit",
+        color, gap: 5, padding: "0 12px", boxSizing: "border-box",
+        userSelect: "none",
+      }}>
+        {icon && <span style={{ fontSize: 13, lineHeight: 1 }}>{icon}</span>}
+        <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+          {truncLabel}
+        </span>
+        {(d.isError || d.isDone || d.isActive) && (
+          <span style={{
+            flexShrink: 0, width: 6, height: 6, borderRadius: "50%",
+            background: d.isError ? "#f87171" : d.isDone ? "#4ade80" : "#14b8a6",
+          }} />
+        )}
+      </div>
+      <Handle type="source" position={Position.Bottom}
+        style={{ background: "transparent", border: "none", width: 1, height: 1 }} />
+    </>
+  );
+}
+
+const HFG_NODE_TYPES = { hfgNode: HFGNodeComponent };
 
 function HarnessFlowGraph({
   nodes,
@@ -902,6 +952,7 @@ function HarnessFlowGraph({
   doneNodeIds = [],
   isStreaming = false,
   width = 480,
+  height,
 }: {
   nodes: HarnessNode[];
   edges: HarnessEdge[];
@@ -910,108 +961,53 @@ function HarnessFlowGraph({
   doneNodeIds?: string[];
   isStreaming?: boolean;
   width?: number;
+  height?: number;
 }) {
-  const { flowNodes, svgHeight } = computeFlowLayout(nodes, edges, width);
+  const { rfNodes, rfEdges, totalHeight } = useMemo(
+    () => computeFlowLayout(nodes, edges, width),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [JSON.stringify(nodes), JSON.stringify(edges), width],
+  );
 
-  const nodeColors = (n: FlowNode) => {
-    if (n.kind === "start") return { fill: "#f0fdfa", stroke: "#2dd4bf", textColor: "#0d9488", dash: "5 3" };
-    if (n.kind === "end")   return { fill: "#0d9488", stroke: "#0d9488", textColor: "#ffffff", dash: "" };
-    if (errorNodeIds.includes(n.id)) return { fill: "#fef2f2", stroke: "#f87171", textColor: "#b91c1c", dash: "" };
-    if (doneNodeIds.includes(n.id))  return { fill: "#dcfce7", stroke: "#4ade80", textColor: "#15803d", dash: "" };
-    if (n.id === activeNodeId)       return { fill: "#ccfbf1", stroke: "#14b8a6", textColor: "#0f766e", dash: "" };
-    return { fill: "#f0fdfa", stroke: "#2dd4bf", textColor: "#134e4a", dash: "" };
-  };
+  // 고정 height 지정 시: 컨텐츠가 더 크면 fitView, 아니면 자연스럽게
+  // height 미지정 시: 컨텐츠 높이 그대로 (모달이 스크롤 처리)
+  // height prop 지정 시 최대 높이 제한 (넘치면 스크롤)
+  const containerH = height ?? totalHeight;
 
-  const getFlowNode = (id: string) => flowNodes.find(n => n.id === id);
-  const kindIcon = (kind: FlowNode["kind"]) =>
-    kind === "subagent" ? "🤖 " : kind === "tool" ? "⚙ " : kind === "source" ? "📦 " : "";
-
-  const halfH = FLOW_NODE_H / 2;
-  const ellipseRY = 18;
+  // Patch node data with live status (active/error/done) without recalculating layout
+  const patchedNodes = useMemo(
+    () => rfNodes.map(n => ({
+      ...n,
+      data: {
+        ...n.data,
+        isActive: n.id === activeNodeId && isStreaming,
+        isError: errorNodeIds.includes(n.id),
+        isDone:  doneNodeIds.includes(n.id),
+      },
+    })),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [rfNodes, activeNodeId, isStreaming, JSON.stringify(errorNodeIds), JSON.stringify(doneNodeIds)],
+  );
 
   return (
-    <svg width={width} height={svgHeight} style={{ display: "block", overflow: "visible" }}>
-      <defs>
-        <marker id="hfg-arrow" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto">
-          <polygon points="0 0, 8 3, 0 6" fill="#94a3b8" />
-        </marker>
-      </defs>
-
-      {/* Edges — rendered from actual HarnessEdge data */}
-      {edges.map((edge) => {
-        const from = getFlowNode(edge.from);
-        const to   = getFlowNode(edge.to);
-        if (!from || !to) return null;
-        const y1 = from.kind === "start" ? from.y + ellipseRY : from.y + halfH;
-        const y2 = to.kind   === "end"   ? to.y   - ellipseRY : to.y   - halfH;
-        const dy = y2 - y1;
-        const isDashed = !!edge.condition;
-        // Bezier curve; offset horizontally for back-edges (loops)
-        const isBackEdge = (to.y ?? 0) <= (from.y ?? 0);
-        const d = isBackEdge
-          ? `M${from.x},${y1} C${from.x - 80},${y1 + 40} ${to.x - 80},${y2 - 40} ${to.x},${y2}`
-          : `M${from.x},${y1} C${from.x},${y1 + dy * 0.55} ${to.x},${y2 - dy * 0.55} ${to.x},${y2}`;
-        return (
-          <g key={edge.id}>
-            <path d={d} fill="none" stroke="#94a3b8" strokeWidth={1.5}
-              strokeDasharray={isDashed ? "5 3" : ""}
-              markerEnd="url(#hfg-arrow)" />
-            {edge.label && (
-              <text x={(from.x + to.x) / 2 + (isBackEdge ? -50 : 8)}
-                y={(y1 + y2) / 2}
-                fontSize={10} fill="#64748b" fontStyle="italic">
-                {edge.label}
-              </text>
-            )}
-          </g>
-        );
-      })}
-
-      {/* Nodes */}
-      {flowNodes.map(node => {
-        const c = nodeColors(node);
-        const isActive = node.id === activeNodeId && isStreaming;
-        const truncLabel = node.label.length > 17 ? node.label.slice(0, 16) + "…" : node.label;
-
-        if (node.kind === "start" || node.kind === "end") {
-          return (
-            <g key={node.id}>
-              <ellipse cx={node.x} cy={node.y} rx={62} ry={ellipseRY}
-                fill={c.fill} stroke={c.stroke} strokeWidth={1.5} strokeDasharray={c.dash} />
-              <text x={node.x} y={node.y} textAnchor="middle" dominantBaseline="middle"
-                fontSize={12} fontFamily="monospace" fill={c.textColor} fontWeight={600}>
-                {node.label}
-              </text>
-            </g>
-          );
-        }
-
-        return (
-          <g key={node.id} style={isActive ? { animation: "pulse 1.5s infinite" } : {}}>
-            <rect x={node.x - FLOW_NODE_W / 2} y={node.y - halfH}
-              width={FLOW_NODE_W} height={FLOW_NODE_H} rx={8}
-              fill={c.fill} stroke={c.stroke} strokeWidth={1.5} strokeDasharray={c.dash} />
-            {errorNodeIds.includes(node.id) && (
-              <circle cx={node.x + FLOW_NODE_W / 2 - 10} cy={node.y - halfH + 10} r={5} fill="#f87171" />
-            )}
-            {doneNodeIds.includes(node.id) && (
-              <circle cx={node.x + FLOW_NODE_W / 2 - 10} cy={node.y - halfH + 10} r={5} fill="#4ade80" />
-            )}
-            {isActive && (
-              <circle cx={node.x + FLOW_NODE_W / 2 - 10} cy={node.y - halfH + 10} r={5} fill="#14b8a6" />
-            )}
-            <text x={node.x - FLOW_NODE_W / 2 + 12} y={node.y} dominantBaseline="middle"
-              fontSize={13} fill={c.textColor}>
-              {kindIcon(node.kind)}
-            </text>
-            <text x={node.x + 10} y={node.y} textAnchor="middle" dominantBaseline="middle"
-              fontSize={12} fill={c.textColor} fontWeight={500}>
-              {truncLabel}
-            </text>
-          </g>
-        );
-      })}
-    </svg>
+    <div style={{ width, height: containerH, overflowY: height ? "auto" : "visible", borderRadius: 8 }}>
+      <div style={{ width, height: totalHeight }}>
+        <ReactFlow
+          nodes={patchedNodes}
+          edges={rfEdges}
+          nodeTypes={HFG_NODE_TYPES}
+          defaultViewport={{ x: 0, y: 0, zoom: 1 }}
+          panOnDrag={false}
+          zoomOnScroll={false}
+          zoomOnDoubleClick={false}
+          nodesDraggable={false}
+          nodesConnectable={false}
+          elementsSelectable={false}
+          proOptions={{ hideAttribution: true }}
+          style={{ background: "transparent" }}
+        />
+      </div>
+    </div>
   );
 }
 
@@ -2089,7 +2085,7 @@ function HarnessesTab({ harnesses, registry, model, onSaved, onNavigate, onRunIn
 
                   {/* Flow graph preview */}
                   <div className="flex justify-center mb-5">
-                    <HarnessFlowGraph nodes={generatedDraft.nodes} edges={generatedDraft.edges} width={520} />
+                    <HarnessFlowGraph nodes={generatedDraft.nodes} edges={generatedDraft.edges} width={520} height={320} />
                   </div>
 
                   {/* Node list */}
