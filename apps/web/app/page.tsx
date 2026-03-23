@@ -74,7 +74,7 @@ export default function Home() {
   const [sessionMessages, setSessionMessages] = useState<Record<string, ChatMessage[]>>({});
   const [navTab, setNavTab] = useState<NavTab>("chat");
   const [rightOpen, setRightOpen] = useState(false);
-  const [globalModel, setGlobalModel] = useState("gpt-5.4-mini");
+  const [globalModel, setGlobalModel] = useState("gpt-4.1-mini");
   // aggregated running tool/log state for right panel (across all sessions)
   const [runningLogs, setRunningLogs] = useState<{ sessionId: string; msgId: string; logs: LogEntry[] }[]>([]);
 
@@ -115,14 +115,28 @@ export default function Home() {
     setSessionMessages(prev => ({ ...prev, [sessionId]: messages }));
   }, []);
 
-  const refreshAll = useCallback(async () => {
-    await Promise.all([
-      fetch("/api/registry").then(r => r.json()).then(setRegistry).catch(console.error),
-      fetch("/api/harnesses").then(r => r.json()).then(setHarnesses).catch(console.error),
-    ]);
+  const refreshAll = useCallback(async (signal?: AbortSignal) => {
+    if (signal?.aborted) return;
+    const opts = signal ? { signal } : undefined;
+    try {
+      const [reg, hns] = await Promise.all([
+        fetch("/api/registry", opts).then(r => r.json()),
+        fetch("/api/harnesses", opts).then(r => r.json()),
+      ]);
+      if (!signal?.aborted) {
+        setRegistry(reg);
+        setHarnesses(hns);
+      }
+    } catch {
+      // silently ignore: aborted on unmount or temporary unavailability during HMR
+    }
   }, []);
 
-  useEffect(() => { refreshAll(); }, [refreshAll]);
+  useEffect(() => {
+    const controller = new AbortController();
+    refreshAll(controller.signal);
+    return () => controller.abort();
+  }, [refreshAll]);
 
   const createSession = (name?: string): string => {
     const id = `sess_${Date.now()}`;
@@ -435,7 +449,6 @@ const CHAT_MODELS = [
   { id: "claude-3-sonnet-20240229",     label: "Claude 3 Sonnet",       provider: "Anthropic" },
   { id: "claude-3-haiku-20240307",      label: "Claude 3 Haiku",        provider: "Anthropic" },
   // OpenAI
-  { id: "gpt-5.4-mini",                 label: "GPT-5.4 mini",           provider: "OpenAI" },
   { id: "gpt-4.1-mini",                 label: "GPT-4.1 mini",           provider: "OpenAI" },
   { id: "gpt-4o",                       label: "GPT-4o",                 provider: "OpenAI" },
   { id: "gpt-4o-mini",                   label: "GPT-4o mini",            provider: "OpenAI" },
@@ -1537,7 +1550,7 @@ function SubAgentsTab({ subAgents, tools, onSaved }: { subAgents: SubAgent[]; to
   const [builtSkills, setBuiltSkills] = useState("");
   const [builtRules, setBuiltRules] = useState("");
   const [selectedTools, setSelectedTools] = useState<Set<string>>(new Set());
-  const [selectedModel, setSelectedModel] = useState("gpt-5.4-mini");
+  const [selectedModel, setSelectedModel] = useState("gpt-4.1-mini");
   const [saving, setSaving] = useState(false);
 
   const textareaRef = useRef<HTMLTextAreaElement>(null);

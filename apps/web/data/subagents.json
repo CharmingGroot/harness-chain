@@ -20,38 +20,5 @@
     "maxIterations": 20,
     "createdAt": "2026-03-22T11:57:41.162Z",
     "updatedAt": "2026-03-22T11:57:41.162Z"
-  },
-  {
-    "id": "sa_dummy_risk_scorer",
-    "name": "위험 스코어러",
-    "description": "[더미] 고객/거래별 위험 점수 0-100 산출",
-    "systemPrompt": "[더미] 위험 스코어링 에이전트입니다.",
-    "tools": ["classify_risk", "score_customer"],
-    "model": "gpt-4o-mini",
-    "maxIterations": 10,
-    "createdAt": "2026-03-22T00:00:00.000Z",
-    "updatedAt": "2026-03-22T00:00:00.000Z"
-  },
-  {
-    "id": "sa_dummy_report_writer",
-    "name": "리포트 작성기",
-    "description": "[더미] 분석 결과를 마크다운 리포트로 작성",
-    "systemPrompt": "[더미] 리포트 작성 에이전트입니다.",
-    "tools": ["summarize_text", "generate_report"],
-    "model": "gpt-4o-mini",
-    "maxIterations": 10,
-    "createdAt": "2026-03-22T00:00:00.000Z",
-    "updatedAt": "2026-03-22T00:00:00.000Z"
-  },
-  {
-    "id": "sa_dummy_alert_agent",
-    "name": "알림 발송기",
-    "description": "[더미] 임계값 초과 시 담당자에게 알림 발송",
-    "systemPrompt": "[더미] 알림 발송 에이전트입니다.",
-    "tools": ["send_alert"],
-    "model": "gpt-4o-mini",
-    "maxIterations": 5,
-    "createdAt": "2026-03-22T00:00:00.000Z",
-    "updatedAt": "2026-03-22T00:00:00.000Z"
   }
 ]
