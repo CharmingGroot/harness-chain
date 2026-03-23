@@ -1,0 +1,114 @@
+[
+  {
+    "id": "h_1774114079482",
+    "name": "VIP 이탈 위험 일일 리포트",
+    "description": "매일 VIP 고객 이탈 위험을 분석해 리포트 생성",
+    "steps": [
+      {
+        "id": "step1",
+        "kind": "subagent",
+        "ref": "sa_1774114079477",
+        "label": "VIP 분석"
+      },
+      {
+        "id": "step2",
+        "kind": "tool",
+        "ref": "execute_query",
+        "label": "데이터 수집"
+      }
+    ],
+    "schedule": {
+      "type": "cron",
+      "cron": "0 9 * * *"
+    },
+    "createdAt": "2026-03-21T17:27:59.482Z",
+    "updatedAt": "2026-03-21T17:27:59.482Z"
+  },
+  {
+    "id": "h_1774114673174",
+    "name": "VIP 고객 이탈 위험 분석",
+    "description": "GOLD/PLATINUM/VIP 고객 중 최근 90일 거래 없는 이탈 위험 고객 식별 및 리포트",
+    "steps": [
+      {
+        "id": "s1",
+        "kind": "source",
+        "ref": "pg-sandbox",
+        "label": "고객/거래 데이터 조회"
+      },
+      {
+        "id": "s2",
+        "kind": "tool",
+        "ref": "execute_query",
+        "label": "이탈 위험 고객 쿼리"
+      },
+      {
+        "id": "s3",
+        "kind": "tool",
+        "ref": "execute_query",
+        "label": "리포트 생성"
+      }
+    ],
+    "schedule": {
+      "type": "cron",
+      "cron": "0 9 * * *"
+    },
+    "createdAt": "2026-03-21T17:37:53.174Z",
+    "updatedAt": "2026-03-21T17:37:53.174Z"
+  },
+  {
+    "id": "h_1774114673183",
+    "name": "이상 거래 탐지 리포트",
+    "description": "fraud_alerts + transactions 결합 — OPEN 상태 고위험 알림 집계 및 패턴 분석",
+    "steps": [
+      {
+        "id": "s1",
+        "kind": "source",
+        "ref": "pg-sandbox",
+        "label": "fraud_alerts 조회"
+      },
+      {
+        "id": "s2",
+        "kind": "tool",
+        "ref": "execute_query",
+        "label": "고위험 거래 탐지"
+      }
+    ],
+    "schedule": {
+      "type": "cron",
+      "cron": "0 * * * *"
+    },
+    "createdAt": "2026-03-21T17:37:53.183Z",
+    "updatedAt": "2026-03-21T17:37:53.183Z"
+  },
+  {
+    "id": "h_1774114673188",
+    "name": "대출 연체 위험 주간 보고",
+    "description": "loans 테이블 기준 연체 현황, 부실 위험 등급별 분포, 고위험 고객 목록",
+    "steps": [
+      {
+        "id": "s1",
+        "kind": "source",
+        "ref": "pg-sandbox",
+        "label": "대출 데이터 조회"
+      },
+      {
+        "id": "s2",
+        "kind": "tool",
+        "ref": "execute_query",
+        "label": "연체 현황 분석"
+      },
+      {
+        "id": "s3",
+        "kind": "tool",
+        "ref": "execute_query",
+        "label": "위험 등급 분류"
+      }
+    ],
+    "schedule": {
+      "type": "cron",
+      "cron": "0 9 * * 1"
+    },
+    "createdAt": "2026-03-21T17:37:53.188Z",
+    "updatedAt": "2026-03-21T17:37:53.188Z"
+  }
+]

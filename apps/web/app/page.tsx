@@ -3,6 +3,8 @@
 import React, { useState, useEffect, useRef, useCallback } from "react";
 import type { AnalyzeEvent } from "@/lib/types";
 import { renderMarkdown } from "@/lib/markdown";
+import { useJob, STEP_LABELS, getStepProgress } from "./job-context";
+import type { JobStep, JobEvent } from "./job-context";
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
@@ -1015,6 +1017,45 @@ function HarnessFlowGraph({
 
 // ── Harness Detail Modal ───────────────────────────────────────────────────────
 
+// ── BuildStepList — 하네스 생성 진행 단계 UI ──────────────────────────────────
+
+const BUILD_STEPS: { step: JobStep; label: string }[] = [
+  { step: "nodes",          label: "노드 설계" },
+  { step: "validate_nodes", label: "노드 검증" },
+  { step: "edges",          label: "엣지 설계" },
+  { step: "validate_edges", label: "엣지 검증" },
+  { step: "meta",           label: "이름 생성" },
+];
+
+function BuildStepList({ jobEvent }: { jobEvent: JobEvent | null }) {
+  const currentStep = jobEvent?.step ?? "queued";
+  const { steps: orderedSteps, currentIndex } = getStepProgress(currentStep as JobStep);
+
+  return (
+    <div className="space-y-2">
+      {BUILD_STEPS.map(({ step, label }) => {
+        const stepIndex = orderedSteps.indexOf(step);
+        const isDone = stepIndex < currentIndex;
+        const isActive = step === currentStep;
+        return (
+          <div key={step} className="flex items-center gap-3 px-4 py-2.5 rounded-lg"
+            style={{ background: "var(--sidebar-bg)", border: `1px solid ${isActive ? "var(--accent)" : "var(--border)"}` }}>
+            <span className="w-5 text-center text-[14px]">
+              {isDone ? "✓" : isActive ? <span className="spinner" style={{ width: 12, height: 12, display: "inline-block" }} /> : "○"}
+            </span>
+            <span className="text-[12.5px]" style={{
+              color: isDone ? "#22c55e" : isActive ? "var(--accent)" : "var(--text-tertiary)",
+              fontWeight: isActive ? 500 : 400,
+            }}>
+              {label}
+            </span>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 function HarnessDetailModal({
   harness,
   onClose,
@@ -1819,6 +1860,10 @@ function HarnessesTab({ harnesses, registry, model, onSaved, onNavigate, onRunIn
   const [selectedHarness, setSelectedHarness] = useState<RealHarness | null>(null);
   const [generatedDraft, setGeneratedDraft] = useState<{ name: string; description: string; nodes: HarnessNode[]; edges: HarnessEdge[] } | null>(null);
   const [buildError, setBuildError] = useState<string | null>(null);
+  const [currentJobId, setCurrentJobId] = useState<string | null>(() =>
+    typeof window !== "undefined" ? localStorage.getItem("hc:currentJobId") : null
+  );
+  const jobEvent = useJob(currentJobId);
 
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const logEndRef = useRef<HTMLDivElement>(null);
@@ -1831,28 +1876,51 @@ function HarnessesTab({ harnesses, registry, model, onSaved, onNavigate, onRunIn
     onRunInSession(h);
   };
 
+  // job 이벤트 → draft/error 자동 반영
+  useEffect(() => {
+    if (!jobEvent) return;
+    if (jobEvent.step === "done" && jobEvent.result) {
+      const r = jobEvent.result as { name: string; description: string; nodes: HarnessNode[]; edges: HarnessEdge[] };
+      setGeneratedDraft(r);
+      setIsBuilding(false);
+      localStorage.removeItem("hc:currentJobId");
+      setCurrentJobId(null);
+    } else if (jobEvent.step === "failed" || jobEvent.step === "cancelled") {
+      setBuildError(jobEvent.error ?? "생성 실패");
+      setIsBuilding(false);
+      localStorage.removeItem("hc:currentJobId");
+      setCurrentJobId(null);
+    }
+  }, [jobEvent]);
+
   const handleBuild = async () => {
     if (!processDesc.trim() || isBuilding) return;
     setIsBuilding(true);
     setGeneratedDraft(null);
     setBuildError(null);
-    setBuildLog([]);
-    setBuiltReport(null);
-    startTimeRef.current = Date.now();
     try {
       const res = await fetch("/api/harnesses/generate", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ prompt: processDesc }),
       });
-      const data = await res.json() as { name?: string; description?: string; nodes?: HarnessNode[]; edges?: HarnessEdge[]; error?: string };
+      const data = await res.json() as { jobId?: string; error?: string };
       if (!res.ok || data.error) throw new Error(data.error ?? `서버 오류 (${res.status})`);
-      setGeneratedDraft({ name: data.name ?? processDesc.slice(0, 40), description: data.description ?? "", nodes: data.nodes ?? [], edges: data.edges ?? [] });
+      const jobId = data.jobId!;
+      setCurrentJobId(jobId);
+      localStorage.setItem("hc:currentJobId", jobId);
     } catch (err) {
       setBuildError(err instanceof Error ? err.message : String(err));
-    } finally {
       setIsBuilding(false);
     }
+  };
+
+  const handleCancelBuild = async () => {
+    if (!currentJobId) return;
+    await fetch(`/api/harnesses/generate?jobId=${currentJobId}`, { method: "DELETE" });
+    setIsBuilding(false);
+    setCurrentJobId(null);
+    localStorage.removeItem("hc:currentJobId");
   };
 
   const handleSaveHarness = async () => {
@@ -1977,13 +2045,19 @@ function HarnessesTab({ harnesses, registry, model, onSaved, onNavigate, onRunIn
                 </div>
               )}
 
-              {/* Loading state */}
+              {/* Loading state — 단계별 진행 체크리스트 */}
               {isBuilding && (
-                <div className="flex flex-col items-center py-16 gap-4">
-                  <div className="spinner" style={{ width: 28, height: 28 }} />
-                  <div className="text-[13px]" style={{ color: "var(--text-secondary)" }}>
-                    노드 설계 → 검증 → 엣지 설계 → 검증 중...
+                <div className="mt-4">
+                  <div className="flex items-center justify-between mb-4">
+                    <div className="text-[13px] font-medium" style={{ color: "var(--text-primary)" }}>
+                      하네스 설계 중...
+                    </div>
+                    <button onClick={handleCancelBuild} className="text-[11px] px-2.5 py-1 rounded-md"
+                      style={{ border: "1px solid var(--border)", color: "var(--text-tertiary)" }}>
+                      취소
+                    </button>
                   </div>
+                  <BuildStepList jobEvent={jobEvent ?? null} />
                 </div>
               )}
 

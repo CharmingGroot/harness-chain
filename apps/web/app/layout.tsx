@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import "./globals.css";
+import { JobProvider } from "./job-context";
 
 export const metadata: Metadata = {
   title: "HarnessChain — AI 업무 자동화 플랫폼",
@@ -13,7 +14,11 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="ko" className="h-full">
-      <body className="h-full">{children}</body>
+      <body className="h-full">
+        <JobProvider>
+          {children}
+        </JobProvider>
+      </body>
     </html>
   );
 }
